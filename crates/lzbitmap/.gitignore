@@ -1,0 +1,33 @@
+*.swp
+*.o
+*.o.tmp
+*.d
+*.so
+*.out
+*.a
+/test/test
+/test/edge_case_test
+/test/edge_case_test_asan
+/test/concurrency_test
+/test/concurrency_test_tsan
+/test/corpus_bench
+/test/decomp_bench
+/test/beam_vs_deep_bench
+/test/advanced_params_test
+*.dSYM/
+/tags
+/version.h
+/test/files/*-recompressed
+/target
+Cargo.lock
+
+# Benchmark corpora are GENERATED, never committed: they are verbatim chunks
+# of third-party binaries copied off the local machine (/Applications,
+# /System/Library, /usr/lib). Committing them would put other people's
+# copyrighted content into this repo's history, and 74MB of it. The sampler
+# that builds them (test/build_corpus_mixed.sh) is the thing worth shipping.
+# The manifest is machine-specific too — it holds absolute local paths.
+/test/corpus_mixed/
+/test/corpus_files_mixed.txt
+/test/vs_crush
+/test/decoder_diff_test
