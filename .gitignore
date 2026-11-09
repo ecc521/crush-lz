@@ -1,0 +1,31 @@
+target/
+.DS_Store
+harness/build/
+
+
+#Corpus content is never committed. 
+#corpus/oss.lock.toml and corpus/manifest.tsv ARE committed (to allow regenerating)
+corpus/cache/
+corpus/segments/
+#manifest_system.tsv is sampled local system files, and will vary per device.
+corpus/manifest_system.tsv  
+
+harness/fuzz/build/
+# Per-job logs libFuzzer writes to the cwd when run with -jobs=N.
+fuzz-*.log
+# A libFuzzer campaign's accumulated corpus, crash/slow-unit repros, our own
+# per-target run logs, and profiling data: all local run artifacts, none
+# meant to be committed.
+harness/fuzz/corpus/
+harness/fuzz/logs/
+harness/fuzz/crash-*
+harness/fuzz/slow-unit-*
+harness/fuzz/*.profraw
+/manifest.txt
+
+/build/
+
+# Local proof test outputs and dev tooling
+*.txt
+opencode.jsonc
+__pycache__/

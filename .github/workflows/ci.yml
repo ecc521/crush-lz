@@ -1,0 +1,77 @@
+name: CI
+
+# Standard runners, so no macOS and no libcompression: the Apple-parity
+# checks are a local pre-release step instead. See CONTRIBUTING.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The C conformance suite. check-quick, not check: it shrinks the
+      # fixtures and bounds the slowest sweep rather than dropping tests,
+      # because a free runner is slow at the optimal-parse DP.
+      - run: make -C harness check-quick
+      - name: Verify fuzz sanitizer enforcement
+        run: |
+          CC=clang harness/fuzz/verify.sh asan
+          CC=clang harness/fuzz/verify.sh msan
+
+  # CBMC proofs of memory safety and termination; see harness/proofs.
+  # The .deb is built for 24.04, so the runner is pinned to match.
+  # lz4_decode_block alone takes about 20 minutes.
+  proofs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CBMC_VERSION: 6.11.0
+      PROOF_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CBMC
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/cbmc.deb" \
+            "https://github.com/diffblue/cbmc/releases/download/cbmc-${CBMC_VERSION}/ubuntu-24.04-cbmc-${CBMC_VERSION}-Linux.deb"
+          sudo apt-get install -y "$RUNNER_TEMP/cbmc.deb"
+          cbmc --version
+      - run: make -C harness proofs
+      - run: make -C harness proofs-mutants
+
+  # No codec library may include an Apple header — only the benches may.
+  portability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No Apple headers in codec sources
+        run: |
+          if grep -rn 'compression\.h\|TargetConditionals\|CoreFoundation' \
+               crates/*/csrc/; then
+            echo "::error::codec C sources must stay portable"
+            exit 1
+          fi
+
+  # Free for public repositories; uncommenting moves the Apple oracle run
+  # out of the manual pre-release steps and into CI.
+  # macos:
+  #   runs-on: macos-14
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: Swatinem/rust-cache@v2
+  #     - run: cargo test --workspace
+  #     - run: make -C harness check-quick
