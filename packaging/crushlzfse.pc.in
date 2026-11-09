@@ -1,0 +1,14 @@
+# Relocatable on purpose: prefix is derived from where this file actually
+# sits, not from the prefix baked in at configure time, so `cmake --install
+# --prefix` and a relocated install tree both resolve correctly.
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: crushlzfse
+Description: Denser LZFSE and LZVN encoders for the formats macOS decodes natively, plus the LZFSE decoder
+Version: @PROJECT_VERSION@
+URL: @PROJECT_HOMEPAGE_URL@
+Libs: -L${libdir} -lcrushlzfse
+Cflags: -I${includedir}

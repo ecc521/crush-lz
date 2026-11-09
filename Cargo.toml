@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/ecc521/crush-lz"
+homepage = "https://github.com/ecc521/crush-lz"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
