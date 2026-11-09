@@ -1,0 +1,30 @@
+[package]
+name = "crushlz"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+# This crate's own code is MPL-2.0, but what it compiles into embeds Apple's
+# BSD-3-Clause sources and Corellium's MIT ones, so all three terms apply.
+license = "MPL-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause"
+description = "One interface and CLI over denser LZFSE, LZVN, LZBITMAP and LZ4 encoders, plus LZMESH, for macOS-decodable formats"
+readme = "README.md"
+homepage.workspace = true
+keywords = ["lzfse", "lzbitmap", "lz4", "compression", "apfs"]
+categories = ["compression", "command-line-utilities"]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "crushlz"
+path = "src/main.rs"
+
+[dependencies]
+crushlzfse = { path = "../crushlzfse", version = "0.1.0" }
+lzbitmap = { path = "../lzbitmap", version = "0.1.0" }
+crushlz4 = { path = "../crushlz4", version = "0.1.0" }
+lzmesh = { path = "../lzmesh", version = "0.1.0" }
+clap = { version = "4", features = ["derive"] }
+
+[lints]
+workspace = true
