@@ -1,0 +1,21 @@
+[package]
+name = "crushlzfse"
+version.workspace = true
+edition.workspace = true
+license = "MPL-2.0 AND BSD-3-Clause"
+description = "Denser LZFSE and LZVN encoders with an optimal parse over 12 levels, plus the LZFSE decoder"
+readme = "README.md"
+homepage.workspace = true
+keywords = ["lzfse", "lzvn", "compression", "macos", "apfs"]
+categories = ["compression", "api-bindings"]
+build = "build.rs"
+repository.workspace = true
+
+[lib]
+path = "rust/lib.rs"
+
+[build-dependencies]
+cc = "1"
+
+[lints]
+workspace = true
