@@ -1,0 +1,24 @@
+[package]
+name = "crushlz4"
+version.workspace = true
+edition.workspace = true
+# Ours (frame, decoder, ladder, bindings) is MPL-2.0; the block encoder is
+# upstream LZ4, vendored unmodified under csrc/vendor/lz4 and BSD-2-Clause
+# only. See ../../THIRD-PARTY.md.
+license = "MPL-2.0 AND BSD-2-Clause"
+description = "An encoder and decoder for Apple's COMPRESSION_LZ4 (bv4-framed LZ4), as used by decmpfs types 15 and 16"
+readme = "README.md"
+homepage.workspace = true
+keywords = ["lz4", "compression", "macos", "apfs", "decmpfs"]
+categories = ["compression", "api-bindings"]
+build = "build.rs"
+repository.workspace = true
+
+[lib]
+path = "rust/lib.rs"
+
+[build-dependencies]
+cc = "1"
+
+[lints]
+workspace = true
