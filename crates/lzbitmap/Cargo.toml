@@ -1,0 +1,21 @@
+[package]
+name = "lzbitmap"
+version.workspace = true
+edition.workspace = true
+license = "MPL-2.0 AND MIT"
+description = "A denser LZBITMAP encoder for APFS transparent compression (decmpfs 13/14), plus the decoder"
+readme = "README.md"
+homepage.workspace = true
+keywords = ["lzbitmap", "compression", "macos", "apfs", "decmpfs"]
+categories = ["compression", "api-bindings"]
+build = "build.rs"
+repository.workspace = true
+
+[lib]
+path = "rust/lib.rs"
+
+[build-dependencies]
+cc = "1"
+
+[lints]
+workspace = true
