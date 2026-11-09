@@ -18,10 +18,11 @@ COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, 
 HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+// Modifications copyright (c) 2026 Tucker Willenborg
+// SPDX-License-Identifier: MPL-2.0 AND BSD-3-Clause
 
-// Finite state entropy coding (FSE)
-// This is an implementation of the tANS algorithm described by Jarek Duda,
-// we use the more descriptive name "Finite State Entropy".
+
+// Finite state entropy coding: Jarek Duda's tANS.
 
 #pragma once
 
@@ -31,10 +32,14 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 #include <stdlib.h>
 #include <string.h>
 
-//  Select between 32/64-bit I/O streams for FSE. Note that the FSE stream
-//  size need not match the word size of the machine, but in practice you
-//  want to use 64b streams on 64b systems for better performance.
-#if defined(_M_AMD64) || defined(__x86_64__) || defined(__arm64__)
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+#ifndef LZFSE_OFFSET
+#define LZFSE_OFFSET(p) __CPROVER_POINTER_OFFSET(p)
+#endif
+#endif
+
+//  64-bit I/O streams on 64-bit targets.
+#if defined(_M_AMD64) || defined(__x86_64__) || defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64)
 #define FSE_IOSTREAM_64 1
 #else
 #define FSE_IOSTREAM_64 0
@@ -103,6 +108,28 @@ static inline uint32_t fse_mask_lsb32(uint32_t x, fse_bit_count nbits) {
   return x & mtable[nbits];
 }
 
+//  Mask the NBITS lsb of X as a shift, for 0 <= NBITS <= 63 only. The decode
+//  hot path stays in range because the input stream invariant is
+//  56 <= accum_nbits < 64.
+static inline uint64_t fse_mask_lsb64_lt(uint64_t x, fse_bit_count nbits) {
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  if (nbits < 0 || nbits >= 64) return 0;
+#else
+  assert(nbits >= 0 && nbits < 64);
+#endif
+  return x & ((1LLU << nbits) - 1LLU);
+}
+
+//  32-bit variant; accum_nbits is in [24, 32) there.
+static inline uint32_t fse_mask_lsb32_lt(uint32_t x, fse_bit_count nbits) {
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  if (nbits < 0 || nbits >= 32) return 0;
+#else
+  assert(nbits >= 0 && nbits < 32);
+#endif
+  return x & ((1U << nbits) - 1U);
+}
+
 /*! @abstract Select \c nbits at index \c start from \c x.
  *  0 <= start <= start+nbits <= 64 */
 FSE_INLINE uint64_t fse_extract_bits64(uint64_t x, fse_bit_count start,
@@ -113,7 +140,6 @@ FSE_INLINE uint64_t fse_extract_bits64(uint64_t x, fse_bit_count start,
     return (x >> start) & ((1LLU << nbits) - 1LLU);
 #endif
 
-  // Otherwise, shift and mask
   return fse_mask_lsb64(x >> start, nbits);
 }
 
@@ -127,15 +153,13 @@ FSE_INLINE uint32_t fse_extract_bits32(uint32_t x, fse_bit_count start,
     return (x >> start) & ((1U << nbits) - 1U);
 #endif
 
-  // Otherwise, shift and mask
   return fse_mask_lsb32(x >> start, nbits);
 }
 
 // MARK: - Bit stream
 
-// I/O streams
-// The streams can be shared between several FSE encoders/decoders, which is why
-// they are not in the state struct
+// Streams are shared between FSE encoders/decoders, so they are not in the
+// state struct.
 
 /*! @abstract Output stream, 64-bit accum. */
 typedef struct {
@@ -143,7 +167,6 @@ typedef struct {
   fse_bit_count accum_nbits; // Number of valid bits in ACCUM, other bits are 0
 } fse_out_stream64;
 
-/*! @abstract Output stream, 32-bit accum. */
 typedef struct {
   uint32_t accum;            // Output bits
   fse_bit_count accum_nbits; // Number of valid bits in ACCUM, other bits are 0
@@ -155,91 +178,27 @@ typedef struct {
   fse_bit_count accum_nbits; // Number of valid bits in ACCUM, other bits are 0
 } fse_in_stream64;
 
-/*! @abstract Object representing an input stream. */
 typedef struct {
   uint32_t accum;            // Input bits
   fse_bit_count accum_nbits; // Number of valid bits in ACCUM, other bits are 0
 } fse_in_stream32;
 
-/*! @abstract Initialize an output stream object. */
-FSE_INLINE void fse_out_init64(fse_out_stream64 *s) {
-  s->accum = 0;
-  s->accum_nbits = 0;
-}
-
-/*! @abstract Initialize an output stream object. */
-FSE_INLINE void fse_out_init32(fse_out_stream32 *s) {
-  s->accum = 0;
-  s->accum_nbits = 0;
-}
-
-/*! @abstract Write full bytes from the accumulator to output buffer, ensuring
- * accum_nbits is in [0, 7].
- * We assume we can write 8 bytes to the output buffer \c (*pbuf[0..7]) in all
- * cases.
- * @note *pbuf is incremented by the number of written bytes. */
-FSE_INLINE void fse_out_flush64(fse_out_stream64 *s, uint8_t **pbuf) {
-  fse_bit_count nbits =
-      s->accum_nbits & -8; // number of bits written, multiple of 8
-
-  // Write 8 bytes of current accumulator
-  memcpy(*pbuf, &(s->accum), 8);
-  *pbuf += (nbits >> 3); // bytes
-
-  // Update state
-  s->accum >>= nbits; // remove nbits
-  s->accum_nbits -= nbits;
-
-  assert(s->accum_nbits >= 0 && s->accum_nbits <= 7);
-  assert(s->accum_nbits == 64 || (s->accum >> s->accum_nbits) == 0);
-}
-
-/*! @abstract Write full bytes from the accumulator to output buffer, ensuring
- * accum_nbits is in [0, 7].
- * We assume we can write 4 bytes to the output buffer \c (*pbuf[0..3]) in all
- * cases.
- * @note *pbuf is incremented by the number of written bytes. */
-FSE_INLINE void fse_out_flush32(fse_out_stream32 *s, uint8_t **pbuf) {
-  fse_bit_count nbits =
-      s->accum_nbits & -8; // number of bits written, multiple of 8
-
-  // Write 4 bytes of current accumulator
-  memcpy(*pbuf, &(s->accum), 4);
-  *pbuf += (nbits >> 3); // bytes
-
-  // Update state
-  s->accum >>= nbits; // remove nbits
-  s->accum_nbits -= nbits;
-
-  assert(s->accum_nbits >= 0 && s->accum_nbits <= 7);
-  assert(s->accum_nbits == 32 || (s->accum >> s->accum_nbits) == 0);
-}
-
-/*! @abstract Write the last bytes from the accumulator to output buffer,
- * ensuring accum_nbits is in [-7, 0]. Bits are padded with 0 if needed.
- * We assume we can write 8 bytes to the output buffer \c (*pbuf[0..7]) in all
- * cases.
- * @note *pbuf is incremented by the number of written bytes. */
+/*! @abstract Write the last bytes, zero-padded, leaving accum_nbits in
+ *  [-7, 0]. Needs 8 writable bytes at *pbuf; advances *pbuf. */
 FSE_INLINE void fse_out_finish64(fse_out_stream64 *s, uint8_t **pbuf) {
   fse_bit_count nbits =
       (s->accum_nbits + 7) & -8; // number of bits written, multiple of 8
 
-  // Write 8 bytes of current accumulator
   memcpy(*pbuf, &(s->accum), 8);
   *pbuf += (nbits >> 3); // bytes
 
-  // Update state
   s->accum = 0; // remove nbits
   s->accum_nbits -= nbits;
 
   assert(s->accum_nbits >= -7 && s->accum_nbits <= 0);
 }
 
-/*! @abstract Write the last bytes from the accumulator to output buffer,
- * ensuring accum_nbits is in [-7, 0]. Bits are padded with 0 if needed.
- * We assume we can write 4 bytes to the output buffer \c (*pbuf[0..3]) in all
- * cases.
- * @note *pbuf is incremented by the number of written bytes. */
+/*! @abstract 32-bit variant of fse_out_finish64; needs 4 writable bytes. */
 FSE_INLINE void fse_out_finish32(fse_out_stream32 *s, uint8_t **pbuf) {
   fse_bit_count nbits =
       (s->accum_nbits + 7) & -8; // number of bits written, multiple of 8
@@ -248,40 +207,15 @@ FSE_INLINE void fse_out_finish32(fse_out_stream32 *s, uint8_t **pbuf) {
   memcpy(*pbuf, &(s->accum), 4);
   *pbuf += (nbits >> 3); // bytes
 
-  // Update state
   s->accum = 0; // remove nbits
   s->accum_nbits -= nbits;
 
   assert(s->accum_nbits >= -7 && s->accum_nbits <= 0);
 }
 
-/*! @abstract Accumulate \c n bits \c b to output stream \c s. We \b must have:
- * 0 <= b < 2^n, and N + s->accum_nbits <= 64.
- * @note The caller must ensure out_flush is called \b before the accumulator
- * overflows to more than 64 bits. */
-FSE_INLINE void fse_out_push64(fse_out_stream64 *s, fse_bit_count n,
-                               uint64_t b) {
-  s->accum |= b << s->accum_nbits;
-  s->accum_nbits += n;
-
-  assert(s->accum_nbits >= 0 && s->accum_nbits <= 64);
-  assert(s->accum_nbits == 64 || (s->accum >> s->accum_nbits) == 0);
-}
-
-/*! @abstract Accumulate \c n bits \c b to output stream \c s. We \b must have:
- * 0 <= n < 2^n, and n + s->accum_nbits <= 32.
- * @note The caller must ensure out_flush is called \b before the accumulator
- * overflows to more than 32 bits. */
-FSE_INLINE void fse_out_push32(fse_out_stream32 *s, fse_bit_count n,
-                               uint32_t b) {
-  s->accum |= b << s->accum_nbits;
-  s->accum_nbits += n;
-
-  assert(s->accum_nbits >= 0 && s->accum_nbits <= 32);
-  assert(s->accum_nbits == 32 || (s->accum >> s->accum_nbits) == 0);
-}
-
-#if FSE_IOSTREAM_64
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+#define DEBUG_CHECK_INPUT_STREAM_PARAMETERS
+#elif FSE_IOSTREAM_64
 #define DEBUG_CHECK_INPUT_STREAM_PARAMETERS                                    \
   assert(s->accum_nbits >= 56 && s->accum_nbits < 64);                         \
   assert((s->accum >> s->accum_nbits) == 0);
@@ -291,52 +225,117 @@ FSE_INLINE void fse_out_push32(fse_out_stream32 *s, fse_bit_count n,
   assert((s->accum >> s->accum_nbits) == 0);
 #endif
 
-/*! @abstract   Initialize the fse input stream so that accum holds between 56
- *  and 63 bits. We never want to have 64 bits in the stream, because that allows
- *  us to avoid a special case in the fse_in_pull function (eliminating an
- *  unpredictable branch), while not requiring any additional fse_flush
- *  operations. This is why we have the special case for n == 0 (in which case
- *  we want to load only 7 bytes instead of 8). */
+/*! @abstract Initialize the input stream so accum holds 56 to 63 bits, never
+ *  64, which is what lets fse_in_pull avoid a special case; hence n == 0
+ *  loads 7 bytes instead of 8. */
 FSE_INLINE int fse_in_checked_init64(fse_in_stream64 *s, fse_bit_count n,
                                      const uint8_t **pbuf,
-                                     const uint8_t *buf_start) {
+                                     const uint8_t *buf_start)
+#if defined(LZFSE_EXACT_FSE)
+__CPROVER_requires(__CPROVER_rw_ok(s, sizeof *s))
+__CPROVER_requires(__CPROVER_rw_ok(pbuf, sizeof *pbuf))
+__CPROVER_requires(n >= -7 && n <= 0)
+__CPROVER_requires(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_requires(__CPROVER_r_ok(buf_start,
+    (size_t)(__CPROVER_POINTER_OFFSET(*pbuf) - __CPROVER_POINTER_OFFSET(buf_start))))
+__CPROVER_requires(!__CPROVER_same_object(s, pbuf))
+__CPROVER_requires(!__CPROVER_same_object(s, buf_start))
+__CPROVER_requires(!__CPROVER_same_object(pbuf, buf_start))
+__CPROVER_assigns(s->accum, s->accum_nbits, *pbuf)
+__CPROVER_ensures(__CPROVER_return_value == 0 || __CPROVER_return_value == -1)
+__CPROVER_ensures(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) <= __CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)) - __CPROVER_POINTER_OFFSET(*pbuf) <= 8)
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    __CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)) - __CPROVER_POINTER_OFFSET(*pbuf) == (n ? 8 : 7))
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    s->accum_nbits == (n ? n + 64 : 56))
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    (s->accum >> s->accum_nbits) == 0)
+#endif
+{
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
   if (n) {
-    if (*pbuf < buf_start + 8)
+    if ((size_t)(*pbuf - buf_start) < 8)
+      return -1; // out of range
+    *pbuf -= 8;
+    s->accum_nbits = n + 64;
+  } else {
+    if ((size_t)(*pbuf - buf_start) < 7)
+      return -1; // out of range
+    *pbuf -= 7;
+    s->accum_nbits = n + 56;
+  }
+#else
+  if (n) {
+    if ((size_t)(*pbuf - buf_start) < 8)
       return -1; // out of range
     *pbuf -= 8;
     memcpy(&(s->accum), *pbuf, 8);
     s->accum_nbits = n + 64;
   } else {
-    if (*pbuf < buf_start + 7)
+    if ((size_t)(*pbuf - buf_start) < 7)
       return -1; // out of range
     *pbuf -= 7;
     memcpy(&(s->accum), *pbuf, 7);
     s->accum &= 0xffffffffffffff;
     s->accum_nbits = n + 56;
   }
+#endif
 
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  if (s->accum_nbits < 56 || s->accum_nbits >= 64) {
+    return -1;
+  }
+#else
   if ((s->accum_nbits < 56 || s->accum_nbits >= 64) ||
       ((s->accum >> s->accum_nbits) != 0)) {
     return -1; // the incoming input is wrong (encoder should have zeroed the
                // upper bits)
   }
+#endif
 
   return 0; // OK
 }
 
-/*! @abstract Identical to previous function, but for 32-bit operation
- * (resulting bit count is between 24 and 31 bits). */
+/*! @abstract 32-bit variant: accum holds 24 to 31 bits. */
 FSE_INLINE int fse_in_checked_init32(fse_in_stream32 *s, fse_bit_count n,
                                      const uint8_t **pbuf,
-                                     const uint8_t *buf_start) {
+                                     const uint8_t *buf_start)
+#if defined(LZFSE_EXACT_FSE)
+__CPROVER_requires(__CPROVER_rw_ok(s, sizeof *s))
+__CPROVER_requires(__CPROVER_rw_ok(pbuf, sizeof *pbuf))
+__CPROVER_requires(n >= -7 && n <= 0)
+__CPROVER_requires(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_requires(__CPROVER_r_ok(buf_start,
+    (size_t)(__CPROVER_POINTER_OFFSET(*pbuf) - __CPROVER_POINTER_OFFSET(buf_start))))
+__CPROVER_requires(!__CPROVER_same_object(s, pbuf))
+__CPROVER_requires(!__CPROVER_same_object(s, buf_start))
+__CPROVER_requires(!__CPROVER_same_object(pbuf, buf_start))
+__CPROVER_assigns(s->accum, s->accum_nbits, *pbuf)
+__CPROVER_ensures(__CPROVER_return_value == 0 || __CPROVER_return_value == -1)
+__CPROVER_ensures(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) <= __CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)))
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    __CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)) - __CPROVER_POINTER_OFFSET(*pbuf) == (n ? 4 : 3))
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    s->accum_nbits == (n ? n + 32 : 24))
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    (s->accum >> s->accum_nbits) == 0)
+#endif
+{
   if (n) {
-    if (*pbuf < buf_start + 4)
+    if ((size_t)(*pbuf - buf_start) < 4)
       return -1; // out of range
     *pbuf -= 4;
     memcpy(&(s->accum), *pbuf, 4);
     s->accum_nbits = n + 32;
   } else {
-    if (*pbuf < buf_start + 3)
+    if ((size_t)(*pbuf - buf_start) < 3)
       return -1; // out of range
     *pbuf -= 3;
     memcpy(&(s->accum), *pbuf, 3);
@@ -344,81 +343,246 @@ FSE_INLINE int fse_in_checked_init32(fse_in_stream32 *s, fse_bit_count n,
     s->accum_nbits = n + 24;
   }
 
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  if (s->accum_nbits < 24 || s->accum_nbits >= 32) {
+    return -1;
+  }
+#else
   if ((s->accum_nbits < 24 || s->accum_nbits >= 32) ||
       ((s->accum >> s->accum_nbits) != 0)) {
     return -1; // the incoming input is wrong (encoder should have zeroed the
                // upper bits)
   }
+#endif
 
   return 0; // OK
 }
 
-/*! @abstract  Read in new bytes from buffer to ensure that we have a full
- * complement of bits in the stream object (again, between 56 and 63 bits).
- * checking the new value of \c *pbuf remains >= \c buf_start.
- * @return 0 if OK.
- * @return -1 on failure. */
+/*! @abstract Refill accum to 56..63 bits, checking *pbuf stays >= buf_start.
+ *  Returns 0, or -1 on underrun. The 8 bytes below buf_start must be
+ *  readable: the refill loads the word ending at *pbuf. Both decoder
+ *  streams have their block header there. */
 FSE_INLINE int fse_in_checked_flush64(fse_in_stream64 *s, const uint8_t **pbuf,
-                                      const uint8_t *buf_start) {
-  //  Get number of bits to add to bring us into the desired range.
+                                      const uint8_t *buf_start)
+#if defined(LZFSE_EXACT_FSE)
+__CPROVER_requires(__CPROVER_rw_ok(s, sizeof *s))
+__CPROVER_requires(__CPROVER_rw_ok(pbuf, sizeof *pbuf))
+__CPROVER_requires(s->accum_nbits >= 0 && s->accum_nbits < 64)
+__CPROVER_requires((s->accum >> s->accum_nbits) == 0)
+__CPROVER_requires(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(buf_start) >= 8)
+__CPROVER_requires(__CPROVER_r_ok(buf_start - 8,
+    (size_t)(__CPROVER_POINTER_OFFSET(*pbuf) - __CPROVER_POINTER_OFFSET(buf_start)) + 8))
+__CPROVER_requires(!__CPROVER_same_object(s, pbuf))
+__CPROVER_requires(!__CPROVER_same_object(s, buf_start))
+__CPROVER_requires(!__CPROVER_same_object(pbuf, buf_start))
+__CPROVER_assigns(s->accum, s->accum_nbits, *pbuf)
+__CPROVER_ensures(__CPROVER_return_value == 0 || __CPROVER_return_value == -1)
+__CPROVER_ensures(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) <= __CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)) - __CPROVER_POINTER_OFFSET(*pbuf) <= 8)
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)) - __CPROVER_POINTER_OFFSET(buf_start) >= 8 ==> __CPROVER_return_value == 0)
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    s->accum_nbits >= 56 && s->accum_nbits < 64)
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> *pbuf == __CPROVER_old(*pbuf))
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> s->accum == __CPROVER_old(s->accum))
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> s->accum_nbits == __CPROVER_old(s->accum_nbits))
+//  After the clauses that bound accum_nbits on both returns, so a caller
+//  assuming this one never shifts by an unconstrained width.
+__CPROVER_ensures((s->accum >> s->accum_nbits) == 0)
+#endif
+{
   fse_bit_count nbits = (63 - s->accum_nbits) & -8;
-  //  Convert bits to bytes and decrement buffer address, then load new data.
-  const uint8_t *buf = (*pbuf) - (nbits >> 3);
-  if (buf < buf_start) {
-    return -1; // out of range
+
+  //  A full accumulator asks for nbits == 0, where the load below would read 8
+  //  bytes and mask every one away. *pbuf can sit 7 bytes from the end of the
+  //  input, so that discarded load runs past the buffer and faults when the
+  //  input ends on a page. The 32-bit variant has always skipped it.
+  if (nbits > 0) {
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+    if (nbits >= 64)
+      return -1;
+    if (LZFSE_OFFSET(*pbuf) < LZFSE_OFFSET(buf_start) + (size_t)(nbits >> 3))
+      return -1;
+    *pbuf = (*pbuf) - (nbits >> 3);
+    s->accum_nbits += nbits;
+    if (s->accum_nbits > 63) s->accum_nbits = 63;
+#else
+    //  Check the remaining span before forming a pointer, then load the
+    //  word ending at *pbuf: no load reaches past *pbuf, and the caller
+    //  guarantees 8 readable bytes below buf_start, so none falls outside
+    //  the input either.
+    size_t nbytes = (size_t)(nbits >> 3);
+    if ((size_t)(*pbuf - buf_start) < nbytes)
+      return -1; // out of range
+    uint64_t word;
+    memcpy(&word, *pbuf - 8, 8);
+    *pbuf -= nbytes;
+    s->accum = (s->accum << nbits) | (word >> (64 - nbits));
+    s->accum_nbits += nbits;
+#endif
   }
-  *pbuf = buf;
-  uint64_t incoming;
-  memcpy(&incoming, buf, 8);
-  // Update the state object and verify its validity (in DEBUG).
-  s->accum = (s->accum << nbits) | fse_mask_lsb64(incoming, nbits);
-  s->accum_nbits += nbits;
   DEBUG_CHECK_INPUT_STREAM_PARAMETERS
   return 0; // OK
 }
 
-/*! @abstract Identical to previous function (but again, we're only filling
- * a 32-bit field with between 24 and 31 bits). */
+/*! @abstract 32-bit variant; the 4 bytes below buf_start must be readable. */
 FSE_INLINE int fse_in_checked_flush32(fse_in_stream32 *s, const uint8_t **pbuf,
-                                      const uint8_t *buf_start) {
-  //  Get number of bits to add to bring us into the desired range.
+                                      const uint8_t *buf_start)
+#if defined(LZFSE_EXACT_FSE)
+__CPROVER_requires(__CPROVER_rw_ok(s, sizeof *s))
+__CPROVER_requires(__CPROVER_rw_ok(pbuf, sizeof *pbuf))
+__CPROVER_requires(s->accum_nbits >= 0 && s->accum_nbits < 32)
+__CPROVER_requires((s->accum >> s->accum_nbits) == 0)
+__CPROVER_requires(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(buf_start) >= 4)
+__CPROVER_requires(__CPROVER_r_ok(buf_start - 4,
+    (size_t)(__CPROVER_POINTER_OFFSET(*pbuf) - __CPROVER_POINTER_OFFSET(buf_start)) + 4))
+__CPROVER_requires(!__CPROVER_same_object(s, pbuf))
+__CPROVER_requires(!__CPROVER_same_object(s, buf_start))
+__CPROVER_requires(!__CPROVER_same_object(pbuf, buf_start))
+__CPROVER_assigns(s->accum, s->accum_nbits, *pbuf)
+__CPROVER_ensures(__CPROVER_return_value == 0 || __CPROVER_return_value == -1)
+__CPROVER_ensures(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) <= __CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)))
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    s->accum_nbits >= 24 && s->accum_nbits < 32)
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> *pbuf == __CPROVER_old(*pbuf))
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> s->accum == __CPROVER_old(s->accum))
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> s->accum_nbits == __CPROVER_old(s->accum_nbits))
+//  After the clauses that bound accum_nbits on both returns, so a caller
+//  assuming this one never shifts by an unconstrained width.
+__CPROVER_ensures((s->accum >> s->accum_nbits) == 0)
+#endif
+{
   fse_bit_count nbits = (31 - s->accum_nbits) & -8;
 
   if (nbits > 0) {
-    //  Convert bits to bytes and decrement buffer address, then load new data.
-    const uint8_t *buf = (*pbuf) - (nbits >> 3);
-    if (buf < buf_start) {
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+    if (nbits >= 32)
+      return -1;
+#endif
+    size_t nbytes = (size_t)(nbits >> 3);
+    if ((size_t)(*pbuf - buf_start) < nbytes)
       return -1; // out of range
-    }
-
-    *pbuf = buf;
-
-    uint32_t incoming = *((uint32_t *)buf);
-
-    // Update the state object and verify its validity (in DEBUG).
-    s->accum = (s->accum << nbits) | fse_mask_lsb32(incoming, nbits);
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+    *pbuf -= nbytes;
     s->accum_nbits += nbits;
+    if (s->accum_nbits > 31) s->accum_nbits = 31;
+#else
+    //  As in fse_in_checked_flush64, with a 4-byte word and 4 readable
+    //  bytes below buf_start.
+    uint32_t word;
+    memcpy(&word, *pbuf - 4, 4);
+    *pbuf -= nbytes;
+    s->accum = (s->accum << nbits) | (word >> (32 - nbits));
+    s->accum_nbits += nbits;
+#endif
   }
-  DEBUG_CHECK_INPUT_STREAM_PARAMETERS
+#if !defined(LZFSE_PROOF) || defined(LZFSE_EXACT_FSE)
+  // This explicit variant retains its 32-bit invariant on 64-bit hosts too.
+  assert(s->accum_nbits >= 24 && s->accum_nbits < 32);
+  assert((s->accum >> s->accum_nbits) == 0);
+#endif
   return 0; // OK
 }
 
-/*! @abstract Pull n bits out of the fse stream object. */
-FSE_INLINE uint64_t fse_in_pull64(fse_in_stream64 *s, fse_bit_count n) {
-  assert(n >= 0 && n <= s->accum_nbits);
-  s->accum_nbits -= n;
-  uint64_t result = s->accum >> s->accum_nbits;
-  s->accum = fse_mask_lsb64(s->accum, s->accum_nbits);
-  return result;
+/*! @abstract As fse_in_checked_flush64 without the bound check. It loads the
+ *  8 bytes below *pbuf, and each flush moves *pbuf down by at most 7 bytes,
+ *  so N unchecked flushes are safe when *pbuf - buf_start >= 8*N at entry. */
+FSE_INLINE void fse_in_flush64_unchecked(fse_in_stream64 *s, const uint8_t **pbuf)
+#if defined(LZFSE_EXACT_FSE)
+__CPROVER_requires(__CPROVER_rw_ok(s, sizeof *s))
+__CPROVER_requires(__CPROVER_rw_ok(pbuf, sizeof *pbuf))
+__CPROVER_requires(s->accum_nbits >= 0 && s->accum_nbits < 64)
+__CPROVER_requires((s->accum >> s->accum_nbits) == 0)
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(*pbuf) >= 8)
+__CPROVER_requires(s->accum_nbits >= 56 || __CPROVER_r_ok(*pbuf - 8, 8))
+__CPROVER_requires(!__CPROVER_same_object(s, pbuf))
+__CPROVER_requires(!__CPROVER_same_object(s, *pbuf))
+__CPROVER_requires(!__CPROVER_same_object(pbuf, *pbuf))
+__CPROVER_assigns(s->accum, s->accum_nbits, *pbuf)
+__CPROVER_ensures(s->accum_nbits >= 56 && s->accum_nbits < 64)
+__CPROVER_ensures((s->accum >> s->accum_nbits) == 0)
+__CPROVER_ensures(*pbuf == __CPROVER_old(*pbuf) - ((63 - __CPROVER_old(s->accum_nbits)) >> 3))
+#endif
+{
+  fse_bit_count nbits = (63 - s->accum_nbits) & -8;
+  if (nbits > 0) { // as in fse_in_checked_flush64
+    const uint8_t *buf = (*pbuf) - (nbits >> 3);
+    *pbuf = buf;
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+    s->accum_nbits += nbits;
+    if (s->accum_nbits > 63) s->accum_nbits = 63;
+#else
+    //  At least 8 bytes lie below the old *pbuf (see above), so the
+    //  word ending there is in bounds.
+    uint64_t word;
+    memcpy(&word, buf + (nbits >> 3) - 8, 8);
+    s->accum = (s->accum << nbits) | (word >> (64 - nbits));
+    s->accum_nbits += nbits;
+#endif
+  }
+  DEBUG_CHECK_INPUT_STREAM_PARAMETERS
 }
 
 /*! @abstract Pull n bits out of the fse stream object. */
-FSE_INLINE uint32_t fse_in_pull32(fse_in_stream32 *s, fse_bit_count n) {
+FSE_INLINE uint64_t fse_in_pull64(fse_in_stream64 *s, fse_bit_count n)
+#if defined(LZFSE_EXACT_FSE)
+__CPROVER_requires(__CPROVER_rw_ok(s, sizeof *s))
+__CPROVER_requires(s->accum_nbits >= 0 && s->accum_nbits < 64)
+__CPROVER_requires(n >= 0 && n <= s->accum_nbits)
+__CPROVER_requires((s->accum >> s->accum_nbits) == 0)
+__CPROVER_assigns(s->accum, s->accum_nbits)
+__CPROVER_ensures(s->accum_nbits == __CPROVER_old(s->accum_nbits) - n)
+__CPROVER_ensures(__CPROVER_return_value ==
+    (__CPROVER_old(s->accum) >> (__CPROVER_old(s->accum_nbits) - n)))
+__CPROVER_ensures((s->accum >> s->accum_nbits) == 0)
+#endif
+{
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  if (n < 0) n = 0;
+  if (n > s->accum_nbits) n = s->accum_nbits;
+  s->accum_nbits -= n;
+  return (uint64_t)(n & 0x3f);
+#else
+  assert(n >= 0 && n <= s->accum_nbits);
+  s->accum_nbits -= n;
+  uint64_t result = s->accum >> s->accum_nbits;
+  s->accum = fse_mask_lsb64_lt(s->accum, s->accum_nbits);
+  return result;
+#endif
+}
+
+FSE_INLINE uint32_t fse_in_pull32(fse_in_stream32 *s, fse_bit_count n)
+#if defined(LZFSE_EXACT_FSE)
+__CPROVER_requires(__CPROVER_rw_ok(s, sizeof *s))
+__CPROVER_requires(s->accum_nbits >= 0 && s->accum_nbits < 32)
+__CPROVER_requires(n >= 0 && n <= s->accum_nbits)
+__CPROVER_requires((s->accum >> s->accum_nbits) == 0)
+__CPROVER_assigns(s->accum, s->accum_nbits)
+__CPROVER_ensures(s->accum_nbits == __CPROVER_old(s->accum_nbits) - n)
+__CPROVER_ensures(__CPROVER_return_value ==
+    (__CPROVER_old(s->accum) >> (__CPROVER_old(s->accum_nbits) - n)))
+__CPROVER_ensures((s->accum >> s->accum_nbits) == 0)
+#endif
+{
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  if (n < 0) n = 0;
+  if (n > s->accum_nbits) n = s->accum_nbits;
+  s->accum_nbits -= n;
+  return (uint32_t)(n & 0x1f);
+#else
   assert(n >= 0 && n <= s->accum_nbits);
   s->accum_nbits -= n;
   uint32_t result = s->accum >> s->accum_nbits;
-  s->accum = fse_mask_lsb32(s->accum, s->accum_nbits);
+  s->accum = fse_mask_lsb32_lt(s->accum, s->accum_nbits);
   return result;
+#endif
 }
 
 // MARK: - Encode/Decode
@@ -426,51 +590,116 @@ FSE_INLINE uint32_t fse_in_pull32(fse_in_stream32 *s, fse_bit_count n) {
 // Map to 32/64-bit implementations and types for I/O
 #if FSE_IOSTREAM_64
 
-typedef uint64_t fse_bits;
 typedef fse_out_stream64 fse_out_stream;
 typedef fse_in_stream64 fse_in_stream;
-#define fse_mask_lsb fse_mask_lsb64
+#define fse_mask_lsb_lt fse_mask_lsb64_lt
 #define fse_extract_bits fse_extract_bits64
-#define fse_out_init fse_out_init64
-#define fse_out_flush fse_out_flush64
 #define fse_out_finish fse_out_finish64
-#define fse_out_push fse_out_push64
 #define fse_in_init fse_in_checked_init64
-#define fse_in_checked_init fse_in_checked_init64
 #define fse_in_flush fse_in_checked_flush64
-#define fse_in_checked_flush fse_in_checked_flush64
 #define fse_in_flush2(_unused, _parameters, _unused2) 0 /* nothing */
-#define fse_in_checked_flush2(_unused, _parameters)     /* nothing */
 #define fse_in_pull fse_in_pull64
 
 #else
 
-typedef uint32_t fse_bits;
 typedef fse_out_stream32 fse_out_stream;
 typedef fse_in_stream32 fse_in_stream;
-#define fse_mask_lsb fse_mask_lsb32
+#define fse_mask_lsb_lt fse_mask_lsb32_lt
 #define fse_extract_bits fse_extract_bits32
-#define fse_out_init fse_out_init32
-#define fse_out_flush fse_out_flush32
 #define fse_out_finish fse_out_finish32
-#define fse_out_push fse_out_push32
 #define fse_in_init fse_in_checked_init32
-#define fse_in_checked_init fse_in_checked_init32
 #define fse_in_flush fse_in_checked_flush32
-#define fse_in_checked_flush fse_in_checked_flush32
 #define fse_in_flush2 fse_in_checked_flush32
-#define fse_in_checked_flush2 fse_in_checked_flush32
 #define fse_in_pull fse_in_pull32
 
 #endif
 
-/*! @abstract Entry for one symbol in the encoder table (64b). */
+/*! @abstract As fse_in_checked_flush64, taking the incoming bytes from
+ *  *next, the 8 bytes below *pbuf loaded by the previous refill, so the
+ *  accumulator update does not wait on a load. Reloads *next for the
+ *  following refill: the caller guarantees the 8 bytes below buf_start are
+ *  readable. Only ARM64 uses it (FSE_LOOKAHEAD_REFILL); elsewhere it is
+ *  the plain refill, since the extra live register is unmeasured on x86. */
+#if (defined(__aarch64__) || defined(_M_ARM64)) && (!defined(LZFSE_PROOF) || defined(LZFSE_EXACT_FSE))
+#define FSE_LOOKAHEAD_REFILL 1
+#else
+#define FSE_LOOKAHEAD_REFILL 0
+#endif
+FSE_INLINE int fse_in_flush_next(fse_in_stream *s, const uint8_t **pbuf,
+                                 const uint8_t *buf_start, uint64_t *next)
+#if defined(LZFSE_EXACT_FSE) && FSE_LOOKAHEAD_REFILL
+__CPROVER_requires(__CPROVER_rw_ok(s, sizeof *s))
+__CPROVER_requires(__CPROVER_rw_ok(pbuf, sizeof *pbuf))
+__CPROVER_requires(__CPROVER_rw_ok(next, sizeof *next))
+__CPROVER_requires(s->accum_nbits >= 0 && s->accum_nbits < 64)
+__CPROVER_requires((s->accum >> s->accum_nbits) == 0)
+__CPROVER_requires(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_requires(__CPROVER_POINTER_OFFSET(buf_start) >= 8)
+__CPROVER_requires(__CPROVER_r_ok(buf_start - 8,
+    (size_t)(__CPROVER_POINTER_OFFSET(*pbuf) - __CPROVER_POINTER_OFFSET(buf_start)) + 8))
+__CPROVER_requires(!__CPROVER_same_object(s, pbuf))
+__CPROVER_requires(!__CPROVER_same_object(s, buf_start))
+__CPROVER_requires(!__CPROVER_same_object(pbuf, buf_start))
+__CPROVER_requires(!__CPROVER_same_object(next, s))
+__CPROVER_requires(!__CPROVER_same_object(next, pbuf))
+__CPROVER_requires(!__CPROVER_same_object(next, buf_start))
+__CPROVER_assigns(s->accum, s->accum_nbits, *pbuf, *next)
+__CPROVER_ensures(__CPROVER_return_value == 0 || __CPROVER_return_value == -1)
+__CPROVER_ensures(__CPROVER_same_object(*pbuf, buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) >= __CPROVER_POINTER_OFFSET(buf_start))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(*pbuf) <= __CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)))
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)) - __CPROVER_POINTER_OFFSET(*pbuf) <= 8)
+__CPROVER_ensures(__CPROVER_POINTER_OFFSET(__CPROVER_old(*pbuf)) - __CPROVER_POINTER_OFFSET(buf_start) >= 8 ==> __CPROVER_return_value == 0)
+__CPROVER_ensures(__CPROVER_return_value == 0 ==>
+    s->accum_nbits >= 56 && s->accum_nbits < 64)
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> *pbuf == __CPROVER_old(*pbuf))
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> s->accum == __CPROVER_old(s->accum))
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> s->accum_nbits == __CPROVER_old(s->accum_nbits))
+//  After the clauses that bound accum_nbits on both returns, so a caller
+//  assuming this one never shifts by an unconstrained width.
+__CPROVER_ensures((s->accum >> s->accum_nbits) == 0)
+__CPROVER_ensures(__CPROVER_return_value == -1 ==> *next == __CPROVER_old(*next))
+#endif
+{
+#if FSE_LOOKAHEAD_REFILL
+  fse_bit_count nbits = (63 - s->accum_nbits) & -8;
+  if (nbits <= 0)
+    return 0;
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  if (nbits >= 64)
+    return -1;
+  if (LZFSE_OFFSET(*pbuf) < LZFSE_OFFSET(buf_start) + (size_t)(nbits >> 3))
+    return -1;
+  const uint8_t *buf = (*pbuf) - (nbits >> 3);
+  *pbuf = buf;
+  s->accum_nbits += nbits;
+  if (s->accum_nbits > 63) s->accum_nbits = 63;
+  *next = 0;
+  return 0;
+#else
+  const uint8_t *buf = (*pbuf) - (nbits >> 3);
+  if (buf < buf_start)
+    return -1;
+  *pbuf = buf;
+  s->accum = (s->accum << nbits) | ((*next >> 1) >> (63 - nbits));
+  s->accum_nbits += nbits;
+  memcpy(next, buf - 8, 8);
+  return 0;
+#endif
+#else
+  (void)next;
+  return fse_in_flush(s, pbuf, buf_start);
+#endif
+}
+
+
+/*! @abstract Entry for one symbol in the encoder table. */
 typedef struct {
   int16_t s0;     // First state requiring a K-bit shift
   int16_t k;      // States S >= S0 are shifted K bits. States S < S0 are
                   // shifted K-1 bits
   int16_t delta0; // Relative increment used to compute next state if S >= S0
-  int16_t delta1; // Relative increment used to compute next state if S < S0
 } fse_encoder_entry;
 
 /*! @abstract  Entry for one state in the decoder table (32b). */
@@ -488,54 +717,94 @@ typedef struct {      // DO NOT REORDER THE FIELDS
   int32_t vbase;      // value base
 } fse_value_decoder_entry;
 
-/*! @abstract Encode SYMBOL using the encoder table, and update \c *pstate,
- *  \c out.
- *  @note The caller must ensure we have enough bits available in the output
- *  stream accumulator. */
-FSE_INLINE void fse_encode(fse_state *__restrict pstate,
-                           const fse_encoder_entry *__restrict encoder_table,
-                           fse_out_stream *__restrict out, uint8_t symbol) {
-  int s = *pstate;
-  fse_encoder_entry e = encoder_table[symbol];
-  int s0 = e.s0;
-  int k = e.k;
-  int delta0 = e.delta0;
-  int delta1 = e.delta1;
-
-  // Number of bits to write
-  int hi = s >= s0;
-  fse_bit_count nbits = hi ? k : (k - 1);
-  fse_state delta = hi ? delta0 : delta1;
-
-  // Write lower NBITS of state
-  fse_bits b = fse_mask_lsb(s, nbits);
-  fse_out_push(out, nbits, b);
-
-  // Update state with remaining bits and delta
-  *pstate = delta + (s >> nbits);
-}
-
-/*! @abstract Decode and return symbol using the decoder table, and update
- *  \c *pstate, \c in.
- *  @note The caller must ensure we have enough bits available in the input
- *  stream accumulator. */
+/*! @abstract Decode and return a symbol, updating *pstate and in. The caller
+ *  must have enough bits in the input accumulator. */
 FSE_INLINE uint8_t fse_decode(fse_state *__restrict pstate,
                               const int32_t *__restrict decoder_table,
                               fse_in_stream *__restrict in) {
   int32_t e = decoder_table[*pstate];
 
-  // Update state from K bits of input + DELTA
   *pstate = (fse_state)(e >> 16) + (fse_state)fse_in_pull(in, e & 0xff);
 
-  // Return the symbol for this state
   return fse_extract_bits(e, 8, 8); // symbol
 }
 
-/*! @abstract Decode and return value using the decoder table, and update \c
- *  *pstate, \c in.
- * \c value_decoder_table[nstates]
- * @note The caller must ensure we have enough bits available in the input
- * stream accumulator. */
+
+/*! @abstract As fse_decode with a uint32_t state, dropping the uint16
+ *  truncation: delta >= 0 and delta + pull(k) <= nstates - 1 for every table
+ *  fse_check_freq admits, so the state stays in range without it. */
+#ifndef LZFSE_ENCODE_LITERAL_STATES
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+#define LZFSE_ENCODE_LITERAL_STATES 64
+#else
+#define LZFSE_ENCODE_LITERAL_STATES 1024
+#endif
+#endif
+
+FSE_INLINE uint8_t fse_decode_u32(uint32_t *__restrict pstate,
+                                  const int32_t *__restrict decoder_table,
+                                  fse_in_stream *__restrict in)
+#if defined(LZFSE_EXACT_FSE)
+#if FSE_IOSTREAM_64
+__CPROVER_requires(__CPROVER_rw_ok(pstate, sizeof *pstate))
+__CPROVER_requires(__CPROVER_rw_ok(in, sizeof *in))
+__CPROVER_requires(__CPROVER_r_ok(decoder_table, LZFSE_ENCODE_LITERAL_STATES * sizeof *decoder_table))
+__CPROVER_requires(*pstate < LZFSE_ENCODE_LITERAL_STATES)
+__CPROVER_requires(in->accum_nbits >= 0 && in->accum_nbits < 64)
+__CPROVER_requires((in->accum >> in->accum_nbits) == 0)
+__CPROVER_requires((decoder_table[*pstate] & 0xff) <= 10)
+__CPROVER_requires((decoder_table[*pstate] & 0xff) <= in->accum_nbits)
+__CPROVER_requires((decoder_table[*pstate] >> 16) >= 0)
+__CPROVER_requires((uint32_t)(decoder_table[*pstate] >> 16) +
+    (((uint32_t)1 << (decoder_table[*pstate] & 0xff)) - 1) < LZFSE_ENCODE_LITERAL_STATES)
+__CPROVER_requires(!__CPROVER_same_object(pstate, in))
+__CPROVER_requires(!__CPROVER_same_object(pstate, decoder_table))
+__CPROVER_requires(!__CPROVER_same_object(in, decoder_table))
+__CPROVER_assigns(*pstate, in->accum, in->accum_nbits)
+__CPROVER_ensures(*pstate < LZFSE_ENCODE_LITERAL_STATES)
+__CPROVER_ensures(in->accum_nbits == __CPROVER_old(in->accum_nbits) -
+    (decoder_table[__CPROVER_old(*pstate)] & 0xff))
+__CPROVER_ensures((in->accum >> in->accum_nbits) == 0)
+#else
+__CPROVER_requires(__CPROVER_rw_ok(pstate, sizeof *pstate))
+__CPROVER_requires(__CPROVER_rw_ok(in, sizeof *in))
+__CPROVER_requires(__CPROVER_r_ok(decoder_table, LZFSE_ENCODE_LITERAL_STATES * sizeof *decoder_table))
+__CPROVER_requires(*pstate < LZFSE_ENCODE_LITERAL_STATES)
+__CPROVER_requires(in->accum_nbits >= 10 && in->accum_nbits < 32)
+__CPROVER_requires((in->accum >> in->accum_nbits) == 0)
+__CPROVER_requires((decoder_table[*pstate] & 0xff) <= 10)
+__CPROVER_requires((decoder_table[*pstate] >> 16) >= 0)
+__CPROVER_requires((uint32_t)(decoder_table[*pstate] >> 16) +
+    (((uint32_t)1 << (decoder_table[*pstate] & 0xff)) - 1) < LZFSE_ENCODE_LITERAL_STATES)
+__CPROVER_requires(!__CPROVER_same_object(pstate, in))
+__CPROVER_requires(!__CPROVER_same_object(pstate, decoder_table))
+__CPROVER_requires(!__CPROVER_same_object(in, decoder_table))
+__CPROVER_assigns(*pstate, in->accum, in->accum_nbits)
+__CPROVER_ensures(*pstate < LZFSE_ENCODE_LITERAL_STATES)
+__CPROVER_ensures(in->accum_nbits >= 0 && in->accum_nbits < 32)
+__CPROVER_ensures(__CPROVER_old(in->accum_nbits) - in->accum_nbits >= 0 &&
+    __CPROVER_old(in->accum_nbits) - in->accum_nbits <= 10)
+__CPROVER_ensures(in->accum_nbits == __CPROVER_old(in->accum_nbits) -
+    (decoder_table[__CPROVER_old(*pstate)] & 0xff))
+__CPROVER_ensures((in->accum >> in->accum_nbits) == 0)
+#endif
+#endif
+{
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  *pstate &= (LZFSE_ENCODE_LITERAL_STATES - 1);
+#endif
+  int32_t e = decoder_table[*pstate];
+
+  *pstate = (uint32_t)(e >> 16) + (uint32_t)fse_in_pull(in, e & 0xff);
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  *pstate &= (LZFSE_ENCODE_LITERAL_STATES - 1);
+#endif
+
+  return (uint8_t)((uint32_t)e >> 8); // symbol
+}
+
+/*! @abstract Decode and return a value, updating *pstate and in. The caller
+ *  must have enough bits in the input accumulator. */
 FSE_INLINE int32_t
 fse_value_decode(fse_state *__restrict pstate,
                  const fse_value_decoder_entry *value_decoder_table,
@@ -545,87 +814,124 @@ fse_value_decode(fse_state *__restrict pstate,
   *pstate =
       (fse_state)(entry.delta + (state_and_value_bits >> entry.value_bits));
   return (int32_t)(entry.vbase +
-                   fse_mask_lsb(state_and_value_bits, entry.value_bits));
+                   fse_mask_lsb_lt(state_and_value_bits, entry.value_bits));
+}
+
+
+/*! @abstract As fse_value_decode with uint32_t state and result. Both are
+ *  non-negative (vbase >= 0 in every base-value table), so the widening
+ *  changes no value and drops the sign extensions. */
+FSE_INLINE uint32_t
+fse_value_decode_u32(uint32_t *__restrict pstate,
+                     const fse_value_decoder_entry *value_decoder_table,
+                     size_t table_offset,
+                     fse_in_stream *__restrict in)
+#if defined(LZFSE_EXACT_FSE)
+__CPROVER_requires(__CPROVER_rw_ok(pstate, sizeof *pstate))
+__CPROVER_requires(__CPROVER_rw_ok(in, sizeof *in))
+__CPROVER_requires(__CPROVER_r_ok(value_decoder_table, 408 * sizeof *value_decoder_table))
+__CPROVER_requires(table_offset == 0 || table_offset == 72 || table_offset == 144)
+__CPROVER_requires(*pstate < (table_offset == 144 ? 256 : 64))
+__CPROVER_requires(in->accum_nbits >= 0 && in->accum_nbits < 64)
+__CPROVER_requires((in->accum >> in->accum_nbits) == 0)
+__CPROVER_requires(value_decoder_table[table_offset + *pstate].value_bits <= 16)
+__CPROVER_requires(value_decoder_table[table_offset + *pstate].total_bits >=
+    value_decoder_table[table_offset + *pstate].value_bits)
+__CPROVER_requires(value_decoder_table[table_offset + *pstate].total_bits -
+    value_decoder_table[table_offset + *pstate].value_bits <= (table_offset == 144 ? 8 : 6))
+__CPROVER_requires(value_decoder_table[table_offset + *pstate].total_bits <= in->accum_nbits)
+__CPROVER_requires(value_decoder_table[table_offset + *pstate].delta >= 0)
+__CPROVER_requires((uint32_t)value_decoder_table[table_offset + *pstate].delta +
+    (((uint32_t)1 << (value_decoder_table[table_offset + *pstate].total_bits -
+                       value_decoder_table[table_offset + *pstate].value_bits)) - 1) <
+    (table_offset == 144 ? 256 : 64))
+__CPROVER_requires(value_decoder_table[table_offset + *pstate].vbase >= 0)
+__CPROVER_requires((uint32_t)value_decoder_table[table_offset + *pstate].vbase <=
+    (table_offset == 0 ? 315 : table_offset == 72 ? 2359 : 262139))
+__CPROVER_requires((uint32_t)value_decoder_table[table_offset + *pstate].vbase +
+    (((uint32_t)1 << value_decoder_table[table_offset + *pstate].value_bits) - 1) <=
+    (table_offset == 0 ? 315 : table_offset == 72 ? 2359 : 262139))
+__CPROVER_requires(!__CPROVER_same_object(pstate, in))
+__CPROVER_requires(!__CPROVER_same_object(pstate, value_decoder_table))
+__CPROVER_requires(!__CPROVER_same_object(in, value_decoder_table))
+__CPROVER_assigns(*pstate, in->accum, in->accum_nbits)
+__CPROVER_ensures(*pstate < (table_offset == 144 ? 256 : 64))
+__CPROVER_ensures(__CPROVER_return_value <=
+    (table_offset == 0 ? 315 : table_offset == 72 ? 2359 : 262139))
+__CPROVER_ensures(in->accum_nbits == __CPROVER_old(in->accum_nbits) -
+    value_decoder_table[table_offset + __CPROVER_old(*pstate)].total_bits)
+__CPROVER_ensures((in->accum >> in->accum_nbits) == 0)
+#endif
+{
+#if defined(LZFSE_PROOF) && !defined(LZFSE_EXACT_FSE)
+  if (table_offset == 0) {
+    *pstate &= 63;
+  } else if (table_offset == 72) {
+    *pstate &= 63;
+  } else {
+    *pstate &= 255;
+  }
+  const fse_value_decoder_entry *entry_ptr = value_decoder_table + table_offset + *pstate;
+  __CPROVER_assert(__CPROVER_r_ok(entry_ptr, sizeof(*entry_ptr)), "decoder table entry readable");
+  uint8_t nondet_u8(void);
+  uint16_t nondet_u16(void);
+  uint32_t nondet_u32(void);
+  (void)fse_in_pull(in, (fse_bit_count)(nondet_u8() & 63));
+  *pstate = (uint32_t)nondet_u16();
+  if (table_offset == 0) {
+    *pstate &= 63;
+    return (uint32_t)(nondet_u16() & 511);
+  } else if (table_offset == 72) {
+    *pstate &= 63;
+    return (uint32_t)(nondet_u16() & 4095);
+  } else {
+    *pstate &= 255;
+    return (uint32_t)(nondet_u32() & 0x7FFFF);
+  }
+#else
+  fse_value_decoder_entry entry = value_decoder_table[table_offset + *pstate];
+  uint32_t state_and_value_bits = (uint32_t)fse_in_pull(in, entry.total_bits);
+  *pstate =
+      (uint32_t)entry.delta + (state_and_value_bits >> entry.value_bits);
+  return (uint32_t)entry.vbase +
+         (uint32_t)fse_mask_lsb_lt(state_and_value_bits, entry.value_bits);
+#endif
 }
 
 // MARK: - Tables
 
-// IMPORTANT: To properly decode an FSE encoded stream, both encoder/decoder
-// tables shall be initialized with the same parameters, including the
-// FREQ[NSYMBOL] array.
-//
+// Encoder and decoder tables must be built from the same freq[] array.
 
-/*! @abstract Sanity check on frequency table, verify sum of \c freq
- *  is <= \c number_of_states. */
+/*! @abstract Returns 0 if sum(freq) <= number_of_states, else -1. */
 FSE_INLINE int fse_check_freq(const uint16_t *freq_table,
                               const size_t table_size,
                               const size_t number_of_states) {
   size_t sum_of_freq = 0;
-  for (int i = 0; i < table_size; i++) {
+  for (size_t i = 0; i < table_size; i++) {
     sum_of_freq += freq_table[i];
   }
   return (sum_of_freq > number_of_states) ? -1 : 0;
 }
 
-/*! @abstract Initialize encoder table \c t[nsymbols].
- *
- * @param nstates
- * sum \c freq[i]; the number of states (a power of 2).
- *
- * @param nsymbols
- * the number of symbols.
- *
- * @param freq[nsymbols]
- * is a normalized histogram of symbol frequencies, with \c freq[i] >= 0.
- * Some symbols may have a 0 frequency. In that case they should not be
- * present in the data.
- */
+/*! @abstract Encoder table; see lzfse_fse.c. */
 void fse_init_encoder_table(int nstates, int nsymbols,
                             const uint16_t *__restrict freq,
                             fse_encoder_entry *__restrict t);
 
-/*! @abstract Initialize decoder table \c t[nstates].
- *
- * @param nstates
- * sum \c freq[i]; the number of states (a power of 2).
- *
- * @param nsymbols
- * the number of symbols.
- *
- * @param feq[nsymbols]
- * a normalized histogram of symbol frequencies, with \c freq[i] >= 0.
- * Some symbols may have a 0 frequency. In that case they should not be
- * present in the data.
- *
- * @return 0 if OK.
- * @return -1 on failure.
- */
+/*! @abstract Entries a decoder table needs past its nstates, which the
+ *  builders below write as overshoot. */
+#define FSE_DECODER_TABLE_SLACK 8
+
 int fse_init_decoder_table(int nstates, int nsymbols,
                            const uint16_t *__restrict freq,
                            int32_t *__restrict t);
 
-/*! @abstract Initialize value decoder table \c t[nstates].
- *
- * @param nstates
- * sum \cfreq[i]; the number of states (a power of 2).
- *
- * @param nsymbols
- * the number of symbols.
- *
- * @param freq[nsymbols]
- * a normalized histogram of symbol frequencies, with \c freq[i] >= 0.
- * \c symbol_vbits[nsymbols] and \c symbol_vbase[nsymbols] are the number of
- * value bits to read and the base value for each symbol.
- * Some symbols may have a 0 frequency.  In that case they should not be
- * present in the data.
- */
-void fse_init_value_decoder_table(int nstates, int nsymbols,
-                                  const uint16_t *__restrict freq,
-                                  const uint8_t *__restrict symbol_vbits,
-                                  const int32_t *__restrict symbol_vbase,
-                                  fse_value_decoder_entry *__restrict t);
+int fse_init_value_decoder_table(int nstates, int nsymbols,
+                                 const uint16_t *__restrict freq,
+                                 const uint8_t *__restrict symbol_vbits,
+                                 const int32_t *__restrict symbol_vbase,
+                                 fse_value_decoder_entry *__restrict t);
 
-/*! @abstract Normalize a table \c t[nsymbols] of occurrences to
- *  \c freq[nsymbols]. */
+/*! @abstract Normalize occurrence counts t[nsymbols] to freq[nsymbols]. */
 void fse_normalize_freq(int nstates, int nsymbols, const uint32_t *__restrict t,
                         uint16_t *__restrict freq);

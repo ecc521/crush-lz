@@ -18,6 +18,9 @@ COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, 
 HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+// Modifications copyright (c) 2026 Tucker Willenborg
+// SPDX-License-Identifier: MPL-2.0 AND BSD-3-Clause
+
 
 // LZFSE decode API
 
@@ -26,13 +29,52 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSI
 
 size_t lzfse_decode_scratch_size() { return sizeof(lzfse_decoder_state); }
 
-size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer, 
-                         size_t dst_size, const uint8_t *__restrict src_buffer,
-                         size_t src_size, void *__restrict scratch_buffer) {
-  lzfse_decoder_state *s = (lzfse_decoder_state *)scratch_buffer;
-  memset(s, 0x00, sizeof(*s));
+#ifdef LZFSE_PROOF
+//  A zero-length buffer may be NULL; the scratch buffer holds one
+//  lzfse_decoder_state, suitably aligned (lzfse_decode_scratch_size()).
+#define LZFSE_PROOF_DECODE_BUFFERS(dst, dst_size, src, src_size)               \
+  __CPROVER_requires(src_size == 0 || (src != NULL && __CPROVER_r_ok(src, src_size))) \
+  __CPROVER_requires(dst_size == 0 || (dst != NULL && __CPROVER_w_ok(dst, dst_size))) \
+  __CPROVER_requires(src_size == 0 || dst_size == 0 ||                       \
+                     LZFSE_DISJOINT_RANGES(src, src_size, dst, dst_size))
+#endif
 
-  // Initialize state
+size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer,
+                         size_t dst_size, const uint8_t *__restrict src_buffer,
+                         size_t src_size, void *__restrict scratch_buffer)
+#ifdef LZFSE_PROOF
+LZFSE_PROOF_DECODE_BUFFERS(dst_buffer, dst_size, src_buffer, src_size)
+__CPROVER_requires(__CPROVER_w_ok(scratch_buffer, sizeof(lzfse_decoder_state)) &&
+                   LZFSE_OFFSET(scratch_buffer) % _Alignof(lzfse_decoder_state) == 0)
+__CPROVER_requires(src_size == 0 || !__CPROVER_same_object(src_buffer, scratch_buffer))
+__CPROVER_requires(dst_size == 0 || !__CPROVER_same_object(dst_buffer, scratch_buffer))
+__CPROVER_assigns(__CPROVER_object_upto(scratch_buffer, sizeof(lzfse_decoder_state)),
+                  lzfse_proof_tables_ok)
+__CPROVER_assigns(dst_size != 0: __CPROVER_object_upto(dst_buffer, dst_size))
+__CPROVER_ensures(__CPROVER_return_value <= dst_size)
+#endif
+{
+  // No stream fits in zero bytes, and src + 0 is undefined for a NULL src.
+  if (src_size == 0)
+    return 0;
+  // Zero-capacity output stays inside a real object, even for a NULL dst.
+  uint8_t empty_dst;
+  if (dst_size == 0)
+    dst_buffer = &empty_dst;
+  lzfse_decoder_state *s = (lzfse_decoder_state *)scratch_buffer;
+  // Load-bearing, not just defensive: a block with n_literals=0 but
+  // n_matches>0 reads literals[] without writing it first, so skipping this
+  // on a reused scratch buffer would leak a prior decode's literal bytes
+  // into this one.
+  memset(s, 0x00, sizeof(*s));
+#ifdef LZFSE_PROOF
+  // Zeroed rows are valid rows; this is where the table ghost starts.
+  __CPROVER_assert(LZFSE_PROOF_LITERAL_TABLE_OK(&s->compressed_lzfse_block_state, _z) &&
+                       LZFSE_PROOF_VALUE_TABLES_OK(&s->compressed_lzfse_block_state, _z),
+                   "zeroed decoder tables are valid");
+  lzfse_proof_tables_ok = 1;
+#endif
+
   s->src = src_buffer;
   s->src_begin = src_buffer;
   s->src_end = s->src + src_size;
@@ -40,7 +82,6 @@ size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer,
   s->dst_begin = dst_buffer;
   s->dst_end = dst_buffer + dst_size;
 
-  // Decode
   int status = lzfse_decode(s);
   if (status == LZFSE_STATUS_DST_FULL)
     return dst_size;
@@ -51,11 +92,24 @@ size_t lzfse_decode_buffer_with_scratch(uint8_t *__restrict dst_buffer,
 
 size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer, size_t dst_size,
                            const uint8_t *__restrict src_buffer,
-                           size_t src_size, void *__restrict scratch_buffer) {
+                           size_t src_size, void *__restrict scratch_buffer)
+#ifdef LZFSE_PROOF
+LZFSE_PROOF_DECODE_BUFFERS(dst_buffer, dst_size, src_buffer, src_size)
+__CPROVER_requires(scratch_buffer == NULL ||
+                   (__CPROVER_w_ok(scratch_buffer, sizeof(lzfse_decoder_state)) &&
+                    LZFSE_OFFSET(scratch_buffer) % _Alignof(lzfse_decoder_state) == 0 &&
+                    (src_size == 0 || !__CPROVER_same_object(src_buffer, scratch_buffer)) &&
+                    (dst_size == 0 || !__CPROVER_same_object(dst_buffer, scratch_buffer))))
+__CPROVER_assigns(lzfse_proof_tables_ok)
+__CPROVER_assigns(scratch_buffer != NULL:
+                  __CPROVER_object_upto(scratch_buffer, sizeof(lzfse_decoder_state)))
+__CPROVER_assigns(dst_size != 0: __CPROVER_object_upto(dst_buffer, dst_size))
+__CPROVER_ensures(__CPROVER_return_value <= dst_size)
+#endif
+{
   int has_malloc = 0;
   size_t ret = 0;
 
-  // Deal with the possible NULL pointer
   if (scratch_buffer == NULL) {
     // +1 in case scratch size could be zero
     scratch_buffer = malloc(lzfse_decode_scratch_size() + 1);
@@ -63,10 +117,10 @@ size_t lzfse_decode_buffer(uint8_t *__restrict dst_buffer, size_t dst_size,
   }
   if (scratch_buffer == NULL)
     return 0;
-  ret = lzfse_decode_buffer_with_scratch(dst_buffer, 
-                               dst_size, src_buffer, 
+  ret = lzfse_decode_buffer_with_scratch(dst_buffer,
+                               dst_size, src_buffer,
                                src_size, scratch_buffer);
   if (has_malloc)
     free(scratch_buffer);
   return ret;
-} 
+}

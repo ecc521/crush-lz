@@ -1,0 +1,28 @@
+*~
+.DS_Store
+**/project.xcworkspace/
+**/xcuserdata/
+build/
+
+# Rust wrapper crate (rust/, tests/*.rs). Cargo.lock isn't committed: this
+# is a library crate, and library crates leave version resolution to their
+# consumers rather than pinning it here.
+target/
+Cargo.lock
+
+# Corpus fixtures are regenerated locally via build_corpus_apps.sh — not
+# committed. corpus_apps/ contains extracted fragments of real third-party
+# app binaries (not ours to redistribute); corpus_files.txt/
+# corpus_files_apps.txt are manifests of machine-specific absolute paths.
+corpus_apps/
+corpus_files.txt
+corpus_files_apps.txt
+
+# libFuzzer's working corpus: generated, machine-specific, and grows without
+# bound. fuzz/build/ is already covered by the build/ rule above. If a run
+# ever produces coverage worth keeping, minimize it (`-merge=1`) into a small
+# committed seed directory rather than committing this one. Crash reproducers
+# (crash-*, timeout-*) SHOULD be committed if found — they are regression
+# tests, not artifacts.
+fuzz/corpus/
+
