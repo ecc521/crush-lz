@@ -1,0 +1,98 @@
+blocks: 8000   block size: 65536   files: 500
+
+Measured 2026-11-08 with --sequential on Apple M5 Max Super cores
+(4.39-4.46 GHz), one engine per corpus pass, in eleven separate runs.
+83 levels and Apple's five encoders.
+
+Only per-engine rows are retained; selection-pool results from separate runs
+are not comparable. harness/tools/readme_table.py consumes the rows below.
+
+ENGINE             ENCODER       RATIO   SAVED%    ENC B/s DEC B/s(ours) DEC B/s(apple)  REFUSED  FAILED
+crushlz4:-5        ours         1.2909   22.53%      4878M       19.15G       24.92G        0       0
+crushlz4:-4        ours         1.4614   31.57%      3382M       14.17G       18.88G        0       0
+crushlz4:-3        ours         1.6775   40.39%      2399M       10.86G       14.61G        0       0
+crushlz4:-2        ours         1.8911   47.12%      1845M        8678M       11.77G        0       0
+crushlz4:-1        ours         2.1874   54.28%      1331M        6903M        8820M        0       0
+crushlz4:0         ours         2.4112   58.53%      1144M        6281M        7382M        0       0
+crushlz4:1         ours         2.6108   61.70%     473.8M        6891M        8140M        0       0
+crushlz4:2         ours         2.7805   64.04%     254.4M        7411M        8763M        0       0
+crushlz4:3         ours         2.8094   64.41%     226.2M        7506M        8843M        0       0
+crushlz4:4         ours         2.8272   64.63%     201.9M        7675M        9004M        0       0
+crushlz4:5         ours         2.8375   64.76%     177.7M        7753M        9080M        0       0
+crushlz4:6         ours         2.8434   64.83%     154.6M        7768M        9068M        0       0
+crushlz4:7         ours         2.8485   64.89%     114.7M        7887M        9122M        0       0
+crushlz4:8         ours         2.8525   64.94%     62.11M        7702M        8973M        0       0
+crushlz4:9         ours         2.8609   65.05%     33.81M        7750M        8999M        0       0
+crushlz4:10        ours         2.8629   65.07%     28.74M        7646M        8788M        0       0
+apple-lz4          APPLE        2.3703   57.81%      1257M        6419M        7621M        0       0
+lzbitmap:-5        ours         2.5137   60.22%     833.8M        7505M        5797M        0       0
+lzbitmap:-4        ours         2.7644   63.83%     807.6M        8012M        6263M        0       0
+lzbitmap:-3        ours         2.8422   64.82%     667.1M        7889M        6168M        0       0
+lzbitmap:-2        ours         2.9039   65.56%     614.1M        8115M        6397M        0       0
+lzbitmap:-1        ours         2.9831   66.48%     526.7M        8067M        6374M        0       0
+lzbitmap:0         ours         2.9971   66.63%     488.1M        7896M        6270M        0       0
+lzbitmap:1         ours         3.0160   66.84%     410.3M        7967M        6328M        0       0
+lzbitmap:2         ours         3.0509   67.22%     347.7M        8168M        6411M        0       0
+lzbitmap:3         ours         3.0824   67.56%     268.2M        7998M        6340M        0       0
+lzbitmap:4         ours         3.1068   67.81%     195.9M        7827M        6349M        0       0
+lzbitmap:5         ours         3.1175   67.92%     154.8M        7847M        6349M        0       0
+lzbitmap:6         ours         3.1242   67.99%     102.6M        7852M        6344M        0       0
+lzbitmap:7         ours         3.1895   68.65%     19.93M        8204M        6465M        0       0
+lzbitmap:8         ours         3.2101   68.85%     17.61M        7727M        6324M        0       0
+lzbitmap:9         ours         3.2257   69.00%     13.56M        7849M        6409M        0       0
+apple-lzbitmap     APPLE        2.9655   66.28%       516M        8234M        6485M        0       0
+lzbitmap:10        ours         3.2453   69.19%       7.6M        7791M        6451M        0       0
+lzbitmap:11        ours         3.2528   69.26%     4.735M        7831M        6498M        0       0
+lzbitmap:12        ours         3.2565   69.29%     2.824M        7774M        6504M        0       0
+lzmesh:-5          ours         3.7064   73.02%     187.2M        1405M        3110M        0       0
+lzmesh:-4          ours         3.7064   73.02%     188.7M        1402M        3143M        0       0
+lzmesh:-3          ours         3.7064   73.02%     188.7M        1418M        3137M        0       0
+lzmesh:-2          ours         3.7064   73.02%     187.9M        1373M        3143M        0       0
+lzmesh:-1          ours         3.7064   73.02%     188.2M        1398M        3135M        0       0
+lzmesh:0           ours         3.7064   73.02%     187.8M        1364M        3141M        0       0
+lzmesh:1           ours         3.7374   73.24%     171.4M        1369M        3175M        0       0
+lzmesh:2           ours         3.7579   73.39%     158.7M        1443M        3205M        0       0
+lzmesh:3           ours         3.7735   73.50%     138.7M        1461M        3219M        0       0
+lzmesh:4           ours         3.7897   73.61%     103.1M        1463M        3247M        0       0
+lzmesh:5           ours         3.7977   73.67%     79.22M        1467M        3241M        0       0
+lzmesh:6           ours         3.8622   74.11%     19.67M        1493M        3243M        0       0
+lzmesh:7           ours         3.8786   74.22%     17.27M        1491M        3291M        0       0
+lzmesh:8           ours         3.9045   74.39%      11.7M        1520M        3289M        0       0
+lzmesh:9           ours         3.9120   74.44%     8.814M        1512M        3259M        0       0
+lzmesh:10          ours         3.9135   74.45%       8.2M        1525M        3308M        0       0
+apple-lzmesh       APPLE        3.6609   72.68%     383.1M        1227M        2745M        0       0
+crushlzfse:-5      ours         2.8966   65.48%      1075M        2917M        2391M        0       0
+crushlzfse:-4      ours         3.0565   67.28%     962.6M        2949M        2455M        0       0
+crushlzfse:-3      ours         3.1801   68.55%     857.9M        2912M        2469M        0       0
+crushlzfse:-2      ours         3.2714   69.43%     710.6M        3036M        2533M        0       0
+crushlzfse:-1      ours         3.3573   70.21%     505.8M        2968M        2524M        0       0
+crushlzfse:0       ours         3.3944   70.54%     334.6M        2896M        2501M        0       0
+crushlzfse:1       ours         3.4635   71.13%     266.4M        3018M        2583M        0       0
+crushlzfse:2       ours         3.4978   71.41%     229.9M        3074M        2619M        0       0
+crushlzfse:3       ours         3.5200   71.59%       189M        3142M        2663M        0       0
+crushlzfse:4       ours         3.5354   71.72%     152.8M        3172M        2682M        0       0
+crushlzfse:5       ours         3.5449   71.79%     126.3M        3134M        2647M        0       0
+crushlzfse:6       ours         3.6172   72.35%     28.53M        2718M        2412M        0       0
+apple-lzfse        APPLE        3.3993   70.58%       200M        3068M        2611M        0       0
+crushlzfse:7       ours         3.6887   72.89%     20.81M        2878M        2529M        0       0
+crushlzfse:8       ours         3.7346   73.22%     13.54M        2825M        2470M        0       0
+crushlzfse:9       ours         3.7815   73.56%     9.131M        2804M        2447M        0       0
+crushlzfse:10      ours         3.8015   73.69%     6.791M        2754M        2406M        0       0
+crushlzfse:11      ours         3.8098   73.75%     3.779M        2733M        2408M        0       0
+crushlzvn:-5       ours         2.4190   58.66%      1359M        3482M        3545M        0       0
+crushlzvn:-4       ours         2.6410   62.14%     995.3M        2411M        2411M        0       0
+crushlzvn:-3       ours         2.7118   63.12%     752.7M        2501M        2501M        0       0
+crushlzvn:-2       ours         2.7957   64.23%     236.7M        2163M        2171M        0       0
+crushlzvn:-1       ours         2.8988   65.50%     186.6M        2212M        2223M        0       0
+crushlzvn:0        ours         2.9679   66.31%       148M        2234M        2248M        0       0
+crushlzvn:1        ours         3.0103   66.78%     109.9M        2246M        2248M        0       0
+crushlzvn:2        ours         3.0438   67.15%     89.72M        2280M        2289M        0       0
+crushlzvn:3        ours         3.0650   67.37%     74.04M        2319M        2324M        0       0
+crushlzvn:4        ours         3.0778   67.51%     60.13M        2303M        2318M        0       0
+crushlzvn:5        ours         3.0778   67.51%     60.24M        2307M        2322M        0       0
+crushlzvn:6        ours         3.0778   67.51%     60.02M        2295M        2312M        0       0
+crushlzvn:7        ours         3.0778   67.51%     60.59M        2305M        2334M        0       0
+apple-lzvn         APPLE        2.9691   66.32%     137.5M        2215M        2244M        0       0
+crushlzvn:8        ours         3.1464   68.22%     14.06M        2380M        2410M        0       0
+crushlzvn:9        ours         3.1840   68.59%     10.12M        2383M        2407M        0       0
+crushlzvn:10       ours         3.1960   68.71%     7.607M        2398M        2428M        0       0

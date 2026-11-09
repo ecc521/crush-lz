@@ -1,0 +1,2 @@
+harness/fuzz/regressions/zbm-fresh-epoch -text -diff
+harness/fuzz/regressions/zbm-simd-tail -text -diff
