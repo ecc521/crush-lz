@@ -1,7 +1,8 @@
 name: CI
 
 # Standard runners, so no macOS and no libcompression: the Apple-parity
-# checks are a local pre-release step instead. See CONTRIBUTING.md.
+# checks and the CBMC proofs (harness/proofs, too memory-hungry for a free
+# runner) are local pre-release steps instead. See CONTRIBUTING.md.
 
 on:
   push:
@@ -31,26 +32,6 @@ jobs:
         run: |
           CC=clang harness/fuzz/verify.sh asan
           CC=clang harness/fuzz/verify.sh msan
-
-  # CBMC proofs of memory safety and termination; see harness/proofs.
-  # The .deb is built for 24.04, so the runner is pinned to match.
-  # lz4_decode_block alone takes about 20 minutes.
-  proofs:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    env:
-      CBMC_VERSION: 6.11.0
-      PROOF_JOBS: 2
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install CBMC
-        run: |
-          curl -fsSL -o "$RUNNER_TEMP/cbmc.deb" \
-            "https://github.com/diffblue/cbmc/releases/download/cbmc-${CBMC_VERSION}/ubuntu-24.04-cbmc-${CBMC_VERSION}-Linux.deb"
-          sudo apt-get install -y "$RUNNER_TEMP/cbmc.deb"
-          cbmc --version
-      - run: make -C harness proofs
-      - run: make -C harness proofs-mutants
 
   # No codec library may include an Apple header — only the benches may.
   portability:
