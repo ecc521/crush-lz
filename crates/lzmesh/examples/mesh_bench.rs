@@ -9,6 +9,8 @@
 //! Rust encoder's) or by Apple's. Reports the best and median rep in MB/s of
 //! uncompressed data. macOS only (Apple engine).
 
+#[cfg(target_os = "macos")]
+mod apple {
 use std::os::raw::c_void;
 use std::time::Instant;
 
@@ -43,7 +45,7 @@ fn report(what: &str, total: usize, comp: usize, mut times: Vec<f64>) {
     );
 }
 
-fn main() {
+pub fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (files, reps, level, engine) = match a[1].as_str() {
         "enc" => (&a[5..], a[4].parse::<usize>().unwrap(), a[3].parse::<i32>().unwrap(), a[2].as_str()),
@@ -105,4 +107,15 @@ fn main() {
         let src_label = if source == "apple" { "apple".to_string() } else { format!("L{level}") };
         report(&format!("dec {engine} ({src_label})"), total, comp, times);
     }
+}
+}
+
+#[cfg(target_os = "macos")]
+fn main() {
+    apple::main();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("this example needs Apple's libcompression and only runs on macOS");
 }

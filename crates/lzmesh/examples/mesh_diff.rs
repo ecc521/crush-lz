@@ -10,6 +10,8 @@
 //! Rust vs C stream bytes are reported as a porting check.
 //! macOS only.
 
+#[cfg(target_os = "macos")]
+mod apple {
 use std::os::raw::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -187,7 +189,7 @@ fn mutate(rng: &mut Rng, s: &[u8]) -> Vec<u8> {
     t
 }
 
-fn main() {
+pub fn main() {
     let mut files = Vec::new();
     let mut mutations = 100usize;
     let mut slice = usize::MAX;
@@ -270,4 +272,15 @@ fn main() {
         println!("encoder: rust streams={enc_streams} rust_fail_or_apple_rejects={enc_apple_fail} identical_to_c={enc_identical} c_encoder_failures={c_enc_fail}");
     }
     std::process::exit(if rust.hard_failures() == 0 && enc_apple_fail == 0 { 0 } else { 1 });
+}
+}
+
+#[cfg(target_os = "macos")]
+fn main() {
+    apple::main();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("this example needs Apple's libcompression and only runs on macOS");
 }
