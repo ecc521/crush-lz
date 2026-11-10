@@ -54,7 +54,7 @@ cover those bodies.
 python3 harness/proofs/inventory.py > coverage.json
 ```
 
-prints the CBMC registry from `run.sh` (256 targets), each harness's
+prints the CBMC registry from `run.sh` (263 targets), each harness's
 assumptions, which target enforces each contract, every replaced contract
 without an enforcing target, and the Frama-C scripts (63). It counts a
 contract as enforced only when a results file written by
@@ -125,7 +125,40 @@ destination and the length result in separate storage ranges.
 | LZFSE chained | `crushlzfse_encode_buffer_chained` and `load_seed`: NULL stats, valid seeds, arbitrary corrupted stats, internal and caller scratch, and error paths. | |
 | LZBITMAP framing and APIs | `frama/zbm_frame.py` proves the framing loop (147 goals). `crushlzbitmap_encode_chunk` and `crushlzbitmap_encode_buffer` (CBMC, with allocation failure) and `zbm_compress_single_chunk` prove the chunk and buffer APIs. `zbm_encoder_params`, `zbm_encoder_scratch`, `zbm_encoder_magic`, `zbm_encoder_stored` and `zbm_encode_bound` prove parameters, scratch layout, the stream header, stored fallback and the worst-case envelope. | `zbm_compress_single_chunk` is proved against a model chunk builder (`mock_build_chunk` in its harness) that succeeds, ties, falls back after a partial attempt, or fails. **The shipping row, fast, DP and beam builders are not proved to meet that model.** |
 | LZBITMAP shared writers | Period, bitmap and fused metadata writers ([frama/README.md](frama/README.md)); the selector writer at every capacity (`frama/selector_tight.py`); the literal writer with supplied and recomputed totals (`frama/literal_writer.py`, `frama/literal_recompute.py`); the trailing table (`frama/trailing_table.py`); and the ordinary metadata caller that composes them (`frama/build_metadata.py`). About 50 CBMC `zbm_encoder_*` targets prove the leaf helpers these scripts import. | Each writer's preconditions (initialized active fields, period-count shape, zero reserved-key counts, written-count headroom, separated buffers) are not established from the strategy callers. |
-| LZBITMAP strategy components | Fast tail producer and loop (`frama/fast_tail.py`, `frama/fast_compose.py`, `frama/tail_counts.py`), fast metadata-2 writer (`frama/fast_meta2.py`), count initialization and folding, block commit and bitmap append, top-table selection, snapshot save and restore, and the trial scorer (`frama/score_trial.py`, `frama/snapshot_values.py`). `zbm_fast_skip` proves the fast loop's skip marker. | The search loops of each strategy and their composition with the writers. Whole LZBITMAP encoder memory safety is therefore not proved. |
+| LZBITMAP strategy components | Fast tail producer and loop (`frama/fast_tail.py`, `frama/fast_compose.py`, `frama/tail_counts.py`), fast metadata-2 writer (`frama/fast_meta2.py`), count initialization and folding, block commit and bitmap append, top-table selection, snapshot save and restore, and the trial scorer (`frama/score_trial.py`, `frama/snapshot_values.py`). `zbm_fast_skip` proves the fast loop's skip marker. | The search loops of each strategy and their composition with the writers ([LZBITMAP encoder search](#lzbitmap-encoder-search)). Whole LZBITMAP encoder memory safety is therefore not proved. |
+| LZBITMAP search indexes and helpers | `zbm_fast_prepare_index` (fast tier) and `zbm_row_prepare_index` with `zbm_row_index_range` (row tier, which DP and beam also use) rebuild the match index for any source size, chunk position, epoch and table contents. Every insert and clear stays inside `row_tab` or the second row index, which may be its own allocation or caller scratch past the state. `zbm_tab_bits` proves the table-size cap both tiers share. The fast loop's helpers on the portable branch: `zbm_fast_hash8` returns eight buckets inside a table of 2^(32 - `sh`) entries, `zbm_fast_score` reads only at the candidate distances it is given and returns one of them or the period in force, and `zbm_pack8` writes exactly 8 bytes. All seven run on the state as a typed allocation with every field unconstrained. | `memset` is a contract (`proof_memset` in `zbm_encoder_state.h`) that checks the cleared range and leaves the bytes unchanged; safety holds for any table contents. The NEON and SSE variants of the three fast helpers. |
+
+### LZBITMAP encoder search
+
+The search loops are not proved. What each one needs:
+
+- **Fast block loop** (`zbm_fast_loop_w`, and the dispatcher `zbm_fast_loop`).
+  The safety argument is local: every candidate distance is clamped to
+  [8, min(position, 65535)] before any load, buckets come from
+  `zbm_fast_hash8`, and each block advances the literal and period-byte
+  cursors by at most 8 and 2 bytes. CBMC 6.11 does not finish a contract
+  proof of the loop on the full state. Stores through pointers into the
+  1.4 MiB state (period bytes into `meta_scratch`, staged literals into
+  `row_tab`) and the candidate loads from `row_tab` each keep SSA conversion
+  from finishing within a 40 GiB cap. Uninterpreted-function arrays, which
+  would avoid that, abort on the state's nested `best` snapshot
+  (`arrays.cpp`: "unexpected array expression: member with 'member'").
+- **Fast builder** (`zbm_build_compressed_chunk_fast`). Needs the loop's
+  contract, and `zbm_build_metadata_fast` additionally needs each
+  `key_usecnts` entry to equal the number of blocks the loop stored with that
+  key, which is a counting invariant, not a bounds one.
+- **Row block loop** (`zbm_build_compressed_chunk_row`). The per-block
+  deciders run to about 550 lines with many inner loops, and
+  `zbm_score_and_commit_candidates` and `zbm_read_needle` have no contracts.
+- **DP** (`zbm_decide_chunk_dp`). Its later passes load `curr - p` for every
+  recorded candidate without a check. That is safe only because the seeding
+  pass records candidates in [8, block position], an invariant over the
+  candidate table's cost-byte encoding that no contract states yet.
+- **Beam** (`zbm_build_compressed_chunk_beam`). Reuses the DP candidate
+  table and needs the same invariant.
+
+`zbm_compress_single_chunk` therefore stays proved against
+`mock_build_chunk`.
 
 LZBITMAP encoder helpers with exact-value proofs: `zbm_diff_bitmap_correct`,
 `zbm_pack8_correct`, `zbm_encoder_nibbles_correct`,
@@ -133,6 +166,6 @@ LZBITMAP encoder helpers with exact-value proofs: `zbm_diff_bitmap_correct`,
 `*_values` targets. These compare the shipping code with an independent
 model for every input in a finite domain.
 
-The LZBITMAP encoder strategies and the Rust encoder entry points have been
-source reviewed and are fuzzed. Review and fuzzing do not close the proof
+The LZBITMAP encoder search loops and the Rust encoder entry points have
+been source reviewed and are fuzzed. Review and fuzzing do not close the proof
 obligations above.

@@ -4030,10 +4030,17 @@ static inline uint32_t zbm_row_bucket(uint32_t key, int sh)
 #define ZBM_TAB_SLACK_BITS 1
 
 static inline int zbm_tab_bits(const struct zbm_compress_state *state, int hash_bits)
+ZBM_REQUIRES(__CPROVER_r_ok(state, sizeof(*state)) && hash_bits >= 1 && hash_bits <= 30)
+ZBM_ASSIGNS()
+ZBM_ENSURES(__CPROVER_return_value <= hash_bits &&
+            (__CPROVER_return_value >= 8 + ZBM_TAB_SLACK_BITS || __CPROVER_return_value == hash_bits))
 {
     int need = 8;
 
     while(need < hash_bits && ((size_t)1 << need) < state->buf_len)
+        ZBM_LOOP_ASSIGNS(need)
+        ZBM_LOOP_INVARIANT(need >= 8 && (need <= hash_bits || need == 8))
+        ZBM_LOOP_DECREASES(hash_bits - need)
         need++;
     need += ZBM_TAB_SLACK_BITS;
     return need < hash_bits ? need : hash_bits;
@@ -4107,8 +4114,29 @@ static inline void zbm_mru8_touch(uint64_t *lo, uint64_t *hi, uint32_t p)
     *hi = zbm_mru4_has(l, p) ? h : nh;
 }
 
+/* Proof predicate: the row tables' geometry. The main table holds
+ * row_ways entries per bucket of 2^(32 - row_sh) buckets inside row_tab; the
+ * second, when present, ZBM_ROW2_BYTES writable bytes outside the state's
+ * own fields. */
+#define ZBM_ROW_TABLES_OK(state)                                                                     \
+    ((state)->row_sh >= 16 && (state)->row_sh <= 31 &&                                               \
+     ((state)->row_ways == 1 || (state)->row_ways == 2 || (state)->row_ways == 4 ||                  \
+      (state)->row_ways == 8 || (state)->row_ways == 16) &&                                          \
+     ((size_t)(state)->row_ways << (32 - (state)->row_sh)) <= ZBM_ROW_WAYS << CRUSHLZBITMAP_MAX_ROW_HASH_BITS && \
+     ((state)->row_tab2 == NULL ||                                                                   \
+      ((state)->row_sh2 >= 32 - ZBM_ROW2_BITS && (state)->row_sh2 <= 31 &&                           \
+       __CPROVER_w_ok((state)->row_tab2, ZBM_ROW2_BYTES) &&                                          \
+       (!__CPROVER_same_object((state)->row_tab2, (state)) ||                                        \
+        (uint8_t *)(state)->row_tab2 >= (uint8_t *)(state) + sizeof(*(state))))))
+#define ZBM_ROW_TABLES_ASSIGNS(state)                                                                \
+    __CPROVER_object_upto((state)->row_tab, sizeof((state)->row_tab));                               \
+    (state)->row_tab2 != NULL: __CPROVER_object_upto((state)->row_tab2, ZBM_ROW2_BYTES)
+
 /* Index every position in [from, to) that has a whole key. */
 static void zbm_row_index_range(struct zbm_compress_state *state, uint32_t from, uint32_t to)
+ZBM_REQUIRES(__CPROVER_rw_ok(state, sizeof(*state)) && ZBM_ROW_TABLES_OK(state))
+ZBM_REQUIRES(state->buf_len <= PROOF_MAX_OBJECT && __CPROVER_r_ok(state->buf_base, state->buf_len))
+ZBM_ASSIGNS(ZBM_ROW_TABLES_ASSIGNS(state))
 {
     const uint8_t *base = state->buf_base;
     uint32_t *tab = state->row_tab;
@@ -4122,6 +4150,9 @@ static void zbm_row_index_range(struct zbm_compress_state *state, uint32_t from,
     if(to > state->buf_len - (ZBM_ROW_KEY_BYTES - 1))
         to = (uint32_t)(state->buf_len - (ZBM_ROW_KEY_BYTES - 1));
     for(p = from; p < to; ++p)
+        ZBM_LOOP_ASSIGNS(p, __CPROVER_object_upto(tab, sizeof(state->row_tab)))
+        ZBM_LOOP_INVARIANT(p >= from && (p == from || p <= to))
+        ZBM_LOOP_DECREASES(to - p)
         zbm_row_insert(tab, zbm_row_bucket(zbm_row_key(base + p), sh), p, ways, epoch_hi);
     if(state->row_tab2) {
         uint32_t *tab2 = state->row_tab2;
@@ -4132,6 +4163,9 @@ static void zbm_row_index_range(struct zbm_compress_state *state, uint32_t from,
         if(to > state->buf_len - (ZBM_ROW_KEY2_BYTES - 1))
             to = (uint32_t)(state->buf_len - (ZBM_ROW_KEY2_BYTES - 1));
         for(p = from; p < to; ++p)
+            ZBM_LOOP_ASSIGNS(p, __CPROVER_object_upto(tab2, ZBM_ROW2_BYTES))
+            ZBM_LOOP_INVARIANT(p >= from && (p == from || p <= to))
+            ZBM_LOOP_DECREASES(to - p)
             zbm_row_insert(tab2, zbm_row_bucket(zbm_row_key2(base + p), sh2), p, ZBM_ROW2_WAYS, epoch_hi);
     }
 }
@@ -4141,6 +4175,22 @@ static void zbm_row_index_range(struct zbm_compress_state *state, uint32_t from,
  * epoch retires every entry of the previous call at once.
  */
 static void zbm_row_prepare_index(struct zbm_compress_state *state, uint32_t chunk_start)
+ZBM_REQUIRES(__CPROVER_rw_ok(state, sizeof(*state)))
+ZBM_REQUIRES(state->params.p.row.hash_bits >= CRUSHLZBITMAP_MIN_ROW_HASH_BITS &&
+             state->params.p.row.hash_bits <= CRUSHLZBITMAP_MAX_ROW_HASH_BITS)
+ZBM_REQUIRES(state->params.p.row.depth == 1 || state->params.p.row.depth == 2 || state->params.p.row.depth == 4 ||
+             state->params.p.row.depth == 8 || state->params.p.row.depth == 16)
+ZBM_REQUIRES(((size_t)state->params.p.row.depth << state->params.p.row.hash_bits) <=
+             ZBM_ROW_WAYS << CRUSHLZBITMAP_MAX_ROW_HASH_BITS)
+ZBM_REQUIRES(state->row_tab2 == NULL ||
+             (__CPROVER_w_ok(state->row_tab2, ZBM_ROW2_BYTES) &&
+              (!__CPROVER_same_object(state->row_tab2, state) ||
+               (uint8_t *)state->row_tab2 >= (uint8_t *)state + sizeof(*state))))
+ZBM_REQUIRES(state->buf_len <= PROOF_MAX_OBJECT && __CPROVER_r_ok(state->buf_base, state->buf_len))
+ZBM_ASSIGNS(state->row_sh, state->row_ways, state->row_sh2, state->row_epoch, state->index_pos,
+            state->index_live, ZBM_ROW_TABLES_ASSIGNS(state))
+ZBM_ENSURES(ZBM_ROW_TABLES_OK(state) && state->row_ways == state->params.p.row.depth)
+ZBM_ENSURES(state->index_live && state->index_pos == chunk_start)
 {
     uint32_t from;
 
@@ -5231,6 +5281,30 @@ typedef char zbm_fast_stage_fits[(ZBM_FAST_TAB_ENTRIES * sizeof(uint32_t) + CRUS
 #define ZBM_FAST_NEON 0
 #endif
 
+/* Proof predicates for the fast search helpers, written out per index
+ * because the contracts avoid quantifiers. Candidate distance dd[i] of n reads 8 bytes
+ * that far behind src; the scorer's pick keeps best's distance or one of
+ * them; the eight buckets fit a table of 2^(32 - sh) entries. */
+#define ZBM_FAST_DD_OK(src, dd, i, n) \
+    ((i) >= (n) || ((dd)[i] >= 8u && (dd)[i] <= 0xffffu && (dd)[i] <= __CPROVER_POINTER_OFFSET(src)))
+#define ZBM_FAST_DDS_OK(src, dd, n)                                                                  \
+    (ZBM_FAST_DD_OK(src, dd, 0, n) && ZBM_FAST_DD_OK(src, dd, 1, n) && ZBM_FAST_DD_OK(src, dd, 2, n) &&  \
+     ZBM_FAST_DD_OK(src, dd, 3, n) && ZBM_FAST_DD_OK(src, dd, 4, n) && ZBM_FAST_DD_OK(src, dd, 5, n) &&  \
+     ZBM_FAST_DD_OK(src, dd, 6, n) && ZBM_FAST_DD_OK(src, dd, 7, n) && ZBM_FAST_DD_OK(src, dd, 8, n) &&  \
+     ZBM_FAST_DD_OK(src, dd, 9, n) && ZBM_FAST_DD_OK(src, dd, 10, n) && ZBM_FAST_DD_OK(src, dd, 11, n))
+#define ZBM_FAST_IS(r, dd, i, n) ((i) < (n) && ((r) & 0xffffu) == (dd)[i])
+#define ZBM_FAST_PICKED(r, best, dd, n)                                                                  \
+    (((r) & 0xffffu) == ((best) & 0xffffu) || ZBM_FAST_IS(r, dd, 0, n) || ZBM_FAST_IS(r, dd, 1, n) ||    \
+     ZBM_FAST_IS(r, dd, 2, n) || ZBM_FAST_IS(r, dd, 3, n) || ZBM_FAST_IS(r, dd, 4, n) ||                 \
+     ZBM_FAST_IS(r, dd, 5, n) || ZBM_FAST_IS(r, dd, 6, n) || ZBM_FAST_IS(r, dd, 7, n) ||                 \
+     ZBM_FAST_IS(r, dd, 8, n) || ZBM_FAST_IS(r, dd, 9, n) || ZBM_FAST_IS(r, dd, 10, n) ||                \
+     ZBM_FAST_IS(r, dd, 11, n))
+#define ZBM_FAST_BUCKET_OK(h, i, sh) ((h)[i] < ((uint32_t)1 << (32 - (sh))))
+#define ZBM_FAST_BUCKETS_OK(h, sh)                                                                       \
+    (ZBM_FAST_BUCKET_OK(h, 0, sh) && ZBM_FAST_BUCKET_OK(h, 1, sh) && ZBM_FAST_BUCKET_OK(h, 2, sh) &&     \
+     ZBM_FAST_BUCKET_OK(h, 3, sh) && ZBM_FAST_BUCKET_OK(h, 4, sh) && ZBM_FAST_BUCKET_OK(h, 5, sh) &&     \
+     ZBM_FAST_BUCKET_OK(h, 6, sh) && ZBM_FAST_BUCKET_OK(h, 7, sh))
+
 /*
  * The plain probe of a block against the period in force: the bitmap of the
  * differing lanes, with the block itself left in a register the literal pack
@@ -5297,6 +5371,11 @@ void zbm_fast_pack(uint8_t *d, zbm_fast_blk blk, uint32_t bm)
  */
 static __attribute__((always_inline)) inline
 uint32_t zbm_fast_score(const uint8_t *src, uint64_t needle, const uint32_t *dd, const int K, uint32_t best)
+ZBM_REQUIRES(K == 4 || K == 6 || K == 10)
+ZBM_REQUIRES(__CPROVER_r_ok(src, 8) && __CPROVER_r_ok(dd, 16 * ((K + 3) / 4)))
+ZBM_REQUIRES(ZBM_FAST_DDS_OK(src, dd, 4 * ((K + 3) / 4)))
+ZBM_ASSIGNS()
+ZBM_ENSURES(ZBM_FAST_PICKED(__CPROVER_return_value, best, dd, 4 * ((K + 3) / 4)))
 {
 #if ZBM_FAST_NEON
     /* Pairs of candidates per register, equal bytes as -1, summed by a
@@ -5387,6 +5466,10 @@ uint32_t zbm_fast_score(const uint8_t *src, uint64_t needle, const uint32_t *dd,
 /* The eight windows' buckets, as zbm_row_bucket() of each window's 4 bytes. */
 static __attribute__((always_inline)) inline
 void zbm_fast_hash8(const uint8_t *src, int sh, uint32_t h[8])
+ZBM_REQUIRES(__CPROVER_r_ok(src, 16) && sh >= 16 && sh <= 31)
+ZBM_REQUIRES(__CPROVER_w_ok(h, 8 * sizeof(uint32_t)) && !__CPROVER_same_object(h, src))
+ZBM_ASSIGNS(__CPROVER_object_upto(h, 8 * sizeof(uint32_t)))
+ZBM_ENSURES(ZBM_FAST_BUCKETS_OK(h, sh))
 {
 #if ZBM_FAST_NEON
     static const uint8_t idx[32] = { 0, 1, 2, 3, 1, 2, 3, 4, 2, 3, 4, 5, 3, 4, 5, 6,
@@ -5741,6 +5824,15 @@ static int zbm_build_metadata_fast(struct zbm_compress_state *state, struct zbm_
  * cleared instead.
  */
 static void zbm_fast_prepare_index(struct zbm_compress_state *state, uint32_t chunk_start)
+ZBM_REQUIRES(__CPROVER_rw_ok(state, sizeof(*state)))
+ZBM_REQUIRES(state->params.p.fast.hash_bits >= CRUSHLZBITMAP_MIN_FAST_HASH_BITS &&
+             state->params.p.fast.hash_bits <= CRUSHLZBITMAP_MAX_FAST_HASH_BITS)
+ZBM_REQUIRES(chunk_start <= UINT32_MAX - 8 && chunk_start <= state->buf_len &&
+             state->buf_len <= PROOF_MAX_OBJECT && __CPROVER_r_ok(state->buf_base, state->buf_len))
+ZBM_ASSIGNS(state->row_sh, state->row_ways, state->row_epoch,
+            __CPROVER_object_upto(state->row_tab, sizeof(state->row_tab[0]) << CRUSHLZBITMAP_MAX_FAST_HASH_BITS))
+ZBM_ENSURES(state->row_sh >= 32 - CRUSHLZBITMAP_MAX_FAST_HASH_BITS && state->row_sh <= 32 - CRUSHLZBITMAP_MIN_FAST_HASH_BITS + 1)
+ZBM_ENSURES(state->row_ways == 1 && state->row_epoch >= 1 && state->row_epoch < (1u << ZBM_ROW_EPOCH_BITS))
 {
     const uint8_t *base = state->buf_base;
     uint32_t *tab = state->row_tab;
@@ -5762,7 +5854,11 @@ static void zbm_fast_prepare_index(struct zbm_compress_state *state, uint32_t ch
     epoch_hi = state->row_epoch << 24;
     p = chunk_start > ZBM_GREEDY_REACH ? (chunk_start - ZBM_GREEDY_REACH + 7u) & ~7u : 0;
     /* Whole groups only: offset 3's key is bytes 3 to 6. */
-    for(; p + 8 <= chunk_start; p += 8) {
+    for(; p + 8 <= chunk_start; p += 8)
+        ZBM_LOOP_ASSIGNS(p, __CPROVER_object_upto(tab, sizeof(tab[0]) << CRUSHLZBITMAP_MAX_FAST_HASH_BITS))
+        ZBM_LOOP_INVARIANT(p <= chunk_start)
+        ZBM_LOOP_DECREASES(chunk_start - p)
+    {
         uint64_t v = zbm_load_u64(base + p);
         uint32_t e = (p & ZBM_ROW_POS_MASK) | epoch_hi;
 

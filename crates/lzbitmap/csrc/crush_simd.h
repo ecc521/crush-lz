@@ -44,6 +44,9 @@
 #define ZBM_SEL_LOAD_CONTRACT                                                \
     ZBM_REQUIRES(__CPROVER_r_ok(row, 8))                                     \
     ZBM_ASSIGNS()
+#define ZBM_PACK8_CONTRACT                                                   \
+    ZBM_REQUIRES(__CPROVER_w_ok(d, 8) && __CPROVER_r_ok(s, 8) && __CPROVER_r_ok(row, 8)) \
+    ZBM_ASSIGNS(__CPROVER_object_upto(d, 8))
 #define ZBM_CPY_CONTRACT(n)                                                  \
     ZBM_REQUIRES(__CPROVER_w_ok(d, n) && __CPROVER_r_ok(s, n))               \
     ZBM_REQUIRES(!__CPROVER_same_object(d, s) || d + (n) <= s || s + (n) <= d) \
@@ -307,6 +310,7 @@ ZBM_BLEND8_ROW_CONTRACT
 }
 
 static inline void zbm_pack8(uint8_t *d, const uint8_t *s, const uint8_t *row)
+ZBM_PACK8_CONTRACT
 {
     for (int i = 0; i < 8; i++)
         d[i] = (row[i] < 8) ? s[row[i]] : 0;

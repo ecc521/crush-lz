@@ -395,6 +395,15 @@ register zbm_encode_bound zbm_encode_bound.c "$ZBM_CSRC" "$ZBM_DEFS" "" ""
 register zbm_diff_bitmap_correct zbm_diff_bitmap_correct.c "$ZBM_CSRC" "$ZBM_DEFS" "" "" 9
 register zbm_encoder_scratch zbm_encoder_scratch.c "$ZBM_CSRC" "$ZBM_DEFS" "" "" 3 "" "--malloc-may-fail"
 register zbm_fast_skip zbm_fast_skip.c "$ZBM_CSRC" "$ZBM_DEFS" zbm_fast_skip_bytes ""
+register zbm_fast_hash8 zbm_fast_search.c "$ZBM_CSRC" "$ZBM_DEFS -DPROOF_FAST_HASH8" zbm_fast_hash8 "proof_memcpy" 9
+register zbm_fast_score zbm_fast_search.c "$ZBM_CSRC" "$ZBM_DEFS" zbm_fast_score "proof_memcpy" 13
+register zbm_tab_bits zbm_fast_index.c "$ZBM_CSRC" "$ZBM_DEFS -DPROOF_TAB_BITS" zbm_tab_bits ""
+register zbm_fast_prepare_index zbm_fast_index.c "$ZBM_CSRC" "$ZBM_DEFS" zbm_fast_prepare_index \
+      "proof_memcpy proof_memset zbm_tab_bits"
+register zbm_row_index_range zbm_row_index.c "$ZBM_CSRC" "$ZBM_DEFS -DPROOF_ROW_RANGE" zbm_row_index_range "proof_memcpy proof_memset"
+register zbm_row_prepare_index zbm_row_index.c "$ZBM_CSRC" "$ZBM_DEFS" zbm_row_prepare_index \
+      "proof_memcpy proof_memset zbm_tab_bits zbm_row_index_range"
+register zbm_pack8 zbm_fast_search.c "$ZBM_CSRC" "$ZBM_DEFS -DPROOF_PACK8" zbm_pack8 "" 9
 register zbm_encoder_params zbm_encoder_params.c "$ZBM_CSRC" "$ZBM_DEFS" "" "" 3
 register zbm_pack8_correct zbm_pack8_correct.c "$ZBM_CSRC" "$ZBM_DEFS" "" "" 9
 register zbm_encoder_table zbm_encoder_table.c "$ZBM_CSRC" "$ZBM_DEFS" "" "" 137
@@ -863,6 +872,17 @@ zbm_decode_no_source_progress|zbm_decode|libzbitmap.c|s/state.src_left -= state.
 zbm_bound_floor_chunks|zbm_encode_bound|libzbitmap.c|s/(src_size + CRUSHLZBITMAP_CHUNK_SIZE - 1) \/ CRUSHLZBITMAP_CHUNK_SIZE/src_size \/ CRUSHLZBITMAP_CHUNK_SIZE/
 zbm_diff_wrong_shift|zbm_diff_bitmap_correct|libzbitmap.c|s/t \* 0x0102040810204080ULL >> 56/t * 0x0102040810204080ULL >> 55/
 zbm_fast_skip_no_progress|zbm_fast_skip|libzbitmap.c|s/return 8 + 8 \* (size_t)(failures >> shift);/return 8 * (size_t)(failures >> shift);/
+zbm_fast_hash_wide|zbm_fast_hash8|libzbitmap.c|s/return (key \* 0x9E3779B1u) >> sh;/return (key * 0x9E3779B1u) >> (sh - 1);/
+zbm_fast_score_overread|zbm_fast_score|libzbitmap.c|s/zbm_load_u64(src - dd\[j\]))/zbm_load_u64(src - dd[j] - 1))/
+zbm_pack8_overrun|zbm_pack8|crush_simd.h|s/for (int i = 0; i < 8; i++)/for (int i = 0; i < 9; i++)/
+zbm_tab_bits_no_cap|zbm_tab_bits|libzbitmap.c|s/return need < hash_bits ? need : hash_bits;/return need;/
+zbm_fast_index_overread|zbm_fast_prepare_index|libzbitmap.c|s/for(; p + 8 <= chunk_start; p += 8)/for(; p + 7 <= chunk_start; p += 8)/
+zbm_fast_index_wide_clear|zbm_fast_prepare_index|libzbitmap.c|s/memset(state->row_tab, 0, sizeof(state->row_tab\[0\]) << (32 - state->row_sh));/memset(state->row_tab, 0, sizeof(state->row_tab[0]) << (35 - state->row_sh));/
+zbm_row_range_no_clip|zbm_row_index_range|libzbitmap.c|s/if(to > state->buf_len - (ZBM_ROW_KEY_BYTES - 1))/if(0)/
+zbm_row_range_no_clip2|zbm_row_index_range|libzbitmap.c|s/if(to > state->buf_len - (ZBM_ROW_KEY2_BYTES - 1))/if(0)/
+zbm_row_range_short_input|zbm_row_index_range|libzbitmap.c|s/if(state->buf_len < ZBM_ROW_KEY_BYTES)/if(0)/
+zbm_row_prepare_tab2_bits|zbm_row_prepare_index|libzbitmap.c|s/zbm_tab_bits(state, ZBM_ROW2_BITS)/zbm_tab_bits(state, ZBM_ROW2_BITS + 1)/
+zbm_row_prepare_wide_clear2|zbm_row_prepare_index|libzbitmap.c|s/ZBM_ROW2_WAYS << (32 - state->row_sh2))/ZBM_ROW2_WAYS << (33 - state->row_sh2))/
 zbm_scratch_short_dp|zbm_encoder_scratch|libzbitmap.c|s/sizeof(uint8_t)  \* ZBM_MAX_BITMAP_COUNT \* n/sizeof(uint8_t)  * (ZBM_MAX_BITMAP_COUNT - 1) * n/
 zbm_encoder_table_no_room|zbm_encoder_table|libzbitmap.c|s/if(state->dest_end - state->dest < ZBM_BITMAP_BYTECNT)/if(0)/
 zbm_encoder_params_bad_depth|zbm_encoder_params|libzbitmap.c|s/if(rp->depth != 1 \&\& rp->depth != 2 \&\& rp->depth != 4 \&\& rp->depth != 8 \&\& rp->depth != 16)/if(0)/

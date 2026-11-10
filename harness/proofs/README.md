@@ -85,7 +85,7 @@ Memory safety and termination, under the assumptions in
 | LZ4 | Our decoder: `crushlz4_decode_buffer` for every input, end to end | Our framing wrapper, allocation and queries. The upstream LZ4 compressor is trusted. |
 | LZVN | The shipping computed-goto decoder body, re-entry, and the public buffer API | Greedy, fast and optimal strategies, emitters, scratch carving and the public API, composed end to end |
 | LZFSE | Frame loop, literal and L/M/D loops, FSE bitstream and table builders, declared-length parser and buffer APIs, composed end to end | Fast, lazy and optimal strategies, backend, chained encoding, parameters, scratch and the public API, composed end to end |
-| LZBITMAP | The full decoder on the portable, NEON and SSE branches | Framing, chunk and buffer APIs for a modelled chunk builder; shared metadata, selector and literal writers; many strategy components. **The strategy builders are not composed, so whole-encoder memory safety is not proved.** |
+| LZBITMAP | The full decoder on the portable, NEON and SSE branches | Framing, chunk and buffer APIs for a modelled chunk builder; shared metadata, selector and literal writers; the fast and row match indexes and the fast search helpers; many strategy components. **The search loops and builders are not composed, so whole-encoder memory safety is not proved.** |
 | LZMESH | Not covered | Not covered |
 
 The table reflects the most recent full replay. No results file is checked
