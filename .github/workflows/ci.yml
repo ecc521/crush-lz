@@ -24,6 +24,20 @@ jobs:
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Conformance binaries and fixtures. An exact hit means no C input
+      # changed, so the objects are touched to look newer than the fresh
+      # checkout and make skips the rebuild. A partial hit only carries the
+      # previous run's test timings, which order the slowest tests first.
+      - name: Restore conformance build
+        id: cbuild
+        uses: actions/cache@v4
+        with:
+          path: harness/build
+          key: conformance-${{ runner.os }}-${{ hashFiles('crates/*/csrc/**', 'harness/conformance/**', 'harness/core/**', 'harness/flags.mk', 'harness/Makefile', 'harness/tools/**') }}
+          restore-keys: conformance-${{ runner.os }}-
+      - name: Mark cached build current
+        if: steps.cbuild.outputs.cache-hit == 'true'
+        run: find harness/build -exec touch {} +
       # The C conformance suite. check-quick, not check: it shrinks the
       # fixtures and bounds the slowest sweep rather than dropping tests,
       # because a free runner is slow at the optimal-parse DP.
