@@ -18,6 +18,23 @@ CODEC_DEPS := $(CODEC_SRCS) $(CODEC_HDRS)
 included_srcs = $(shell grep -o 'include "[a-z_0-9]*\.c"' $(1) 2>/dev/null | sed 's/include "//; s/"//')
 codec_srcs_for = $(filter-out $(foreach f,$(call included_srcs,$(1)),%/$(f)),$(CODEC_SRCS))
 
+# Each codec source is compiled once per build variant into $(1)/obj and
+# linked into every test, instead of being recompiled for each test binary.
+# $(1) is the variant's build dir, $(2) the test source.
+CODEC_OBJ_HDRS := $(CODEC_HDRS) $(wildcard $(LZ4_CSRC)/vendor/lz4/*.h)
+codec_objs_for = $(patsubst %.c,$(1)/obj/%.o,$(notdir $(call codec_srcs_for,$(2))))
+codec_objs_all = $(patsubst %.c,$(1)/obj/%.o,$(notdir $(CODEC_SRCS)))
+vpath %.c $(sort $(dir $(CODEC_SRCS)))
+
+# $(1) is the variant's build dir, $(2) its compile flags.
+define CODEC_OBJ_RULE
+$(1)/obj/%.o: %.c $(CODEC_OBJ_HDRS) | $(1)/obj
+	$$(CC) $(2) -pthread -c $$< -o $$@
+$(1)/obj:
+	@mkdir -p $$@
+endef
+$(eval $(call CODEC_OBJ_RULE,$(BUILD),$(CFLAGS)))
+
 # Investigation tools, built on request. zbm_apple_probe is macOS only.
 PROBE_BINS := $(BUILD)/zbm_sweep $(BUILD)/crushlzfse_sweep $(BUILD)/crushlzvn_sweep \
                $(BUILD)/crushlz4_sweep $(BUILD)/level_table $(BUILD)/zbm_edge_cases
@@ -52,13 +69,13 @@ sanitize: asan-check tsan-check
 $(BUILD) $(BUILD)/asan $(BUILD)/tsan $(BUILD)/msan:
 	@mkdir -p $@
 
-$(BUILD)/bench: $(HARNESS_ROOT)/bench/main.c $(CORE_SRCS) $(CODEC_DEPS) | $(BUILD)
-	$(CC) $(CFLAGS) -pthread -o $@ $(filter %.c,$^) $(LIBS) $(ENGINE_LIBS)
+$(BUILD)/bench: $(HARNESS_ROOT)/bench/main.c $(CORE_SRCS) $(call codec_objs_all,$(BUILD)) | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ $(filter %.c %.o,$^) $(LIBS) $(ENGINE_LIBS)
 
 # $(APPLE_LIBS) because the crushlzvn_{candidate,dispatch,greedy} tests compare
 # against Apple's libcompression under #ifdef __APPLE__; it is empty elsewhere.
-$(BUILD)/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_DEPS) | $(BUILD)
-	$(CC) $(CFLAGS) -pthread -o $@ $< $(call codec_srcs_for,$<) $(LIBS) $(APPLE_LIBS)
+$(BUILD)/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_HDRS) $(call codec_objs_all,$(BUILD)) | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ $< $(call codec_objs_for,$(BUILD),$<) $(LIBS) $(APPLE_LIBS)
 
 # zbm_decoder_diff_test links libzbitmap.c twice: once as shipped, once with
 # the decoder's fast paths disabled and every public symbol renamed. Every
@@ -123,14 +140,22 @@ $(BUILD)/msan/zbm_simd_diff_test: $(HARNESS_ROOT)/conformance/zbm_simd_diff_test
                                   $(CODEC_DEPS) | $(BUILD)/msan
 	$(call BUILD_SIMD_DIFF_TEST,$@,$(SAN_CFLAGS) $(MSAN_FLAGS))
 
-$(BUILD)/asan/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_DEPS) | $(BUILD)/asan
-	$(CC) $(SAN_CFLAGS) $(ASAN_FLAGS) -pthread -o $@ $< $(call codec_srcs_for,$<) $(LIBS) $(APPLE_LIBS)
+$(eval $(call CODEC_OBJ_RULE,$(BUILD)/asan,$(SAN_CFLAGS) $(ASAN_FLAGS)))
+$(eval $(call CODEC_OBJ_RULE,$(BUILD)/tsan,$(SAN_CFLAGS) $(TSAN_FLAGS)))
+$(eval $(call CODEC_OBJ_RULE,$(BUILD)/msan,$(SAN_CFLAGS) $(MSAN_FLAGS)))
 
-$(BUILD)/tsan/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_DEPS) | $(BUILD)/tsan
-	$(CC) $(SAN_CFLAGS) $(TSAN_FLAGS) -pthread -o $@ $< $(call codec_srcs_for,$<) $(LIBS) $(APPLE_LIBS)
+# Objects reached only through pattern rules would otherwise be deleted as
+# intermediates after each build.
+.SECONDARY: $(foreach d,$(BUILD) $(BUILD)/asan $(BUILD)/tsan $(BUILD)/msan,$(call codec_objs_all,$(d)))
 
-$(BUILD)/msan/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_DEPS) | $(BUILD)/msan
-	$(CC) $(SAN_CFLAGS) $(MSAN_FLAGS) -pthread -o $@ $< $(call codec_srcs_for,$<) $(LIBS)
+$(BUILD)/asan/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_HDRS) $(call codec_objs_all,$(BUILD)/asan) | $(BUILD)/asan
+	$(CC) $(SAN_CFLAGS) $(ASAN_FLAGS) -pthread -o $@ $< $(call codec_objs_for,$(BUILD)/asan,$<) $(LIBS) $(APPLE_LIBS)
+
+$(BUILD)/tsan/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_HDRS) $(call codec_objs_all,$(BUILD)/tsan) | $(BUILD)/tsan
+	$(CC) $(SAN_CFLAGS) $(TSAN_FLAGS) -pthread -o $@ $< $(call codec_objs_for,$(BUILD)/tsan,$<) $(LIBS) $(APPLE_LIBS)
+
+$(BUILD)/msan/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_HDRS) $(call codec_objs_all,$(BUILD)/msan) | $(BUILD)/msan
+	$(CC) $(SAN_CFLAGS) $(MSAN_FLAGS) -pthread -o $@ $< $(call codec_objs_for,$(BUILD)/msan,$<) $(LIBS)
 
 FIXTURE_DIR := $(BUILD)/fixtures
 FIXTURE_MANIFEST := $(FIXTURE_DIR)/manifest.txt
@@ -228,8 +253,11 @@ $(COV_DIR)/zbm_simd_diff_test: $(HARNESS_ROOT)/conformance/zbm_simd_diff_test.c 
                                $(CODEC_DEPS) | $(COV_DIR)
 	$(call BUILD_SIMD_DIFF_TEST,$@,$(SAN_CFLAGS) $(COV_FLAGS))
 
-$(COV_DIR)/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_DEPS) | $(COV_DIR)
-	$(CC) $(SAN_CFLAGS) $(COV_FLAGS) -pthread -o $@ $< $(call codec_srcs_for,$<) $(LIBS)
+$(eval $(call CODEC_OBJ_RULE,$(COV_DIR),$(SAN_CFLAGS) $(COV_FLAGS)))
+.SECONDARY: $(call codec_objs_all,$(COV_DIR))
+
+$(COV_DIR)/%: $(HARNESS_ROOT)/conformance/%.c $(CODEC_HDRS) $(call codec_objs_all,$(COV_DIR)) | $(COV_DIR)
+	$(CC) $(SAN_CFLAGS) $(COV_FLAGS) -pthread -o $@ $< $(call codec_objs_for,$(COV_DIR),$<) $(LIBS)
 
 .PHONY: coverage
 coverage: $(COV_BINS) $(ASAN_FIXTURE_MANIFEST)
@@ -280,27 +308,27 @@ $(BUILD)/zbm_sweep: $(HARNESS_ROOT)/tools/zbm_sweep.c \
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(LIBS) $(APPLE_LIBS)
 
 $(BUILD)/crushlzfse_sweep: $(HARNESS_ROOT)/tools/crushlzfse_sweep.c \
-                    $(CODEC_SRCS) | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(LIBS) $(APPLE_LIBS)
+                    $(call codec_objs_all,$(BUILD)) | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ $(filter %.c %.o,$^) $(LIBS) $(APPLE_LIBS)
 
 $(BUILD)/crushlzvn_sweep: $(HARNESS_ROOT)/tools/crushlzvn_sweep.c \
-                    $(CODEC_SRCS) | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(LIBS) $(APPLE_LIBS)
+                    $(call codec_objs_all,$(BUILD)) | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ $(filter %.c %.o,$^) $(LIBS) $(APPLE_LIBS)
 
 $(BUILD)/crushlz4_sweep: $(HARNESS_ROOT)/tools/crushlz4_sweep.c \
-                    $(CODEC_SRCS) | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(LIBS) $(APPLE_LIBS)
+                    $(call codec_objs_all,$(BUILD)) | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ $(filter %.c %.o,$^) $(LIBS) $(APPLE_LIBS)
 
 $(BUILD)/level_table: $(HARNESS_ROOT)/tools/level_table.c \
-                    $(CODEC_SRCS) | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(LIBS) $(APPLE_LIBS)
+                    $(call codec_objs_all,$(BUILD)) | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ $(filter %.c %.o,$^) $(LIBS) $(APPLE_LIBS)
 
 
 # Binaries only; fixtures survive.
 clean:
 	rm -rf $(BUILD)/bench $(BUILD)/asan $(BUILD)/tsan $(BUILD)/msan $(BUILD)/coverage \
 	       $(BUILD)/make_fixtures $(BUILD)/make_fixtures_asan $(BUILD)/make_fixtures_san $(BUILD)/.logs* \
-	       $(BUILD)/*.o $(BUILD)/*.dSYM $(CONFORMANCE_BINS) $(PROBE_BINS)
+	       $(BUILD)/obj $(BUILD)/*.o $(BUILD)/*.dSYM $(CONFORMANCE_BINS) $(PROBE_BINS)
 
 # Everything, fixtures included.
 distclean:
