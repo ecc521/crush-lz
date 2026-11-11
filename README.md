@@ -4,13 +4,16 @@ LZFSE, LZVN, LZBITMAP, LZ4 and LZMESH encoders and decoders for
 Apple-compatible compression streams. Written in C, with Rust bindings and a CLI. Higher
 compression levels target smaller output for APFS filesystem compression.
 
-| crate | contents | license |
-|---|---|---|
-| [`crushlzfse`](crates/crushlzfse) | LZFSE and LZVN encoders and decoders | MPL-2.0 AND BSD-3-Clause |
-| [`lzbitmap`](crates/lzbitmap) | LZBITMAP encoder and decoder | MPL-2.0 AND MIT |
-| [`crushlz4`](crates/crushlz4) | LZ4 encoder and decoder | MPL-2.0 AND BSD-2-Clause |
-| [`lzmesh`](crates/lzmesh) | LZMESH encoder and decoder | MPL-2.0 |
-| [`crushlz`](crates/crushlz) | Combined Rust API and CLI | MPL-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause |
+To compress files on APFS with these encoders, see
+[apfscompress](https://github.com/ecc521/apfscompress).
+
+| crate | contents | license | docs |
+|---|---|---|---|
+| [`crushlzfse`](crates/crushlzfse) | LZFSE and LZVN encoders and decoders | MPL-2.0 AND BSD-3-Clause | [crates.io](https://crates.io/crates/crushlzfse) · [docs.rs](https://docs.rs/crushlzfse) |
+| [`lzbitmap`](crates/lzbitmap) | LZBITMAP encoder and decoder | MPL-2.0 AND MIT | [crates.io](https://crates.io/crates/lzbitmap) · [docs.rs](https://docs.rs/lzbitmap) |
+| [`crushlz4`](crates/crushlz4) | LZ4 encoder and decoder | MPL-2.0 AND BSD-2-Clause | [crates.io](https://crates.io/crates/crushlz4) · [docs.rs](https://docs.rs/crushlz4) |
+| [`lzmesh`](crates/lzmesh) | LZMESH encoder and decoder | MPL-2.0 | [crates.io](https://crates.io/crates/lzmesh) · [docs.rs](https://docs.rs/lzmesh) |
+| [`crushlz`](crates/crushlz) | Combined Rust API and CLI | MPL-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause | [crates.io](https://crates.io/crates/crushlz) · [docs.rs](https://docs.rs/crushlz) |
 
 ## Compatibility
 

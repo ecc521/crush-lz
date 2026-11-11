@@ -2,7 +2,8 @@
 
 Apple LZMESH (`COMPRESSION_LZMESH`, `0xE05`) encoder and decoder for `crush-lz`.
 Streams decode with macOS `libcompression`, and the decoder reads Apple's own
-streams. The format notes are in `docs/lzmesh-format-notes.md`.
+streams. The format notes are in
+[`docs/lzmesh-format-notes.md`](../../docs/lzmesh-format-notes.md).
 
 ## Levels
 
